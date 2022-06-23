@@ -1,9 +1,9 @@
 C:\Users\aster\Documents\C# Projects\Better Traffic Laws\bin\Release\BetterTrafficLaws.dll
 C:\Users\aster\Documents\C# Projects\Better Traffic Laws\bin\Release\BetterTrafficLaws.pdb
 C:\Users\aster\Documents\C# Projects\Better Traffic Laws\bin\Release\NativeUI.dll
-C:\Users\aster\Documents\C# Projects\Better Traffic Laws\bin\Release\ScriptHookVDotNet2.dll
 C:\Users\aster\Documents\C# Projects\Better Traffic Laws\obj\Release\BetterTrafficLaws.dll
 C:\Users\aster\Documents\C# Projects\Better Traffic Laws\obj\Release\BetterTrafficLaws.pdb
 C:\Users\aster\Documents\C# Projects\Better Traffic Laws\obj\Release\Better Traffic Laws.csprojAssemblyReference.cache
 C:\Users\aster\Documents\C# Projects\Better Traffic Laws\obj\Release\Better Traffic Laws.csproj.CoreCompileInputs.cache
 C:\Users\aster\Documents\C# Projects\Better Traffic Laws\obj\Release\Better Traffic Laws.csproj.CopyComplete
+C:\Users\aster\Documents\C# Projects\Better Traffic Laws\bin\Release\ScriptHookVDotNet3.dll
