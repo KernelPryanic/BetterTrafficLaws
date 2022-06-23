@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Windows.Forms;
 using GTA;
 using GTA.Math;
@@ -7,6 +8,11 @@ using GTA.Native;
 using NativeUI;
 
 namespace BetterTrafficLaws {
+    public static class Logger {
+        public static void LogError(object message) {
+            File.AppendAllText("BetterTrafficLaws.log", DateTime.Now + " [Error] " + message + Environment.NewLine);
+        }
+    }
     class BetterTrafficLaws : Script {
         ScriptSettings Config;
         Keys OpenMenu;
@@ -47,26 +53,26 @@ namespace BetterTrafficLaws {
             KeyUp += OnKeyUp;
         }
 
-        void OnTick(object sender, EventArgs e) {
+        void OnTick(object sender, EventArgs eventArgs) {
             if (MenuPool != null && MenuPool.IsAnyMenuOpen()) {
                 MenuPool.ProcessMenus();
             }
 
-            if (Period < 4) {
+            if (Period < 5) {
                 Period++;
                 return;
             } else {
                 Period = 0;
             }
 
-            if (!Enabled.Checked || Game.Player.WantedLevel > 0 || !Game.Player.Character.IsInVehicle()) return;
+            if (!Enabled.Checked || Game.Player.WantedLevel > 0 || Game.Player == null || !Game.Player.Character.IsInVehicle()) return;
 
             Vehicle currentVehicle = Game.Player.Character.CurrentVehicle;
             float currentSpeed = ((string) SpeedUnits.Items[SpeedUnits.Index] == "KMH") ? ToKMH(currentVehicle.Speed) : ToMPH(currentVehicle.Speed);
             int timeSinceAgainstTraffic = Function.Call<int>(Hash.GET_TIME_SINCE_PLAYER_DROVE_AGAINST_TRAFFIC, Game.Player);
             int timeSinceDroveOnPavement = Function.Call<int>(Hash.GET_TIME_SINCE_PLAYER_DROVE_ON_PAVEMENT, Game.Player);
             int timeSinceHitPed = Function.Call<int>(Hash.GET_TIME_SINCE_PLAYER_HIT_PED, Game.Player);
-            int timeHSinceitVehicle = Function.Call<int>(Hash.GET_TIME_SINCE_PLAYER_HIT_VEHICLE, Game.Player);
+            int timeHSinceHitVehicle = Function.Call<int>(Hash.GET_TIME_SINCE_PLAYER_HIT_VEHICLE, Game.Player);
 
             if (IsRunningOnRedLight(currentVehicle)) {
                 RedLightCount++;
@@ -95,18 +101,18 @@ namespace BetterTrafficLaws {
                 OverspeedHighwayCount = 0;
             }
 
-            // UI.ShowSubtitle("No Arrest " + RedLightCount.ToString());
+            // GTA.UI.Screen.ShowSubtitle("No Arrest " + RedLightCount.ToString());
 
-            if (AgainstTrafficCount < 16 && DriveOnPavementCount < 16 &&
-                OverspeedCount < 16 && OverspeedHighwayCount < 16 &&
+            if (AgainstTrafficCount < 15 && DriveOnPavementCount < 15 &&
+                OverspeedCount < 15 && OverspeedHighwayCount < 15 &&
                 (timeSinceHitPed < 0 || timeSinceHitPed > 200) &&
-                (timeHSinceitVehicle < 0 || timeHSinceitVehicle > 200) &&
+                (timeHSinceHitVehicle < 0 || timeHSinceHitVehicle > 200 || Math.Abs(currentVehicle.Speed) <= 2) &&
                 (RedLightCount == 0)
             ) {
                 return;
             }
 
-            // UI.ShowSubtitle("Arrest " + RedLightCount.ToString());
+            // GTA.UI.Screen.ShowSubtitle("Arrest " + RedLightCount.ToString());
 
             List<PedHash> allowedCops = new List<PedHash> {
                 (PedHash) PedHash.Cop01SFY,
@@ -117,7 +123,7 @@ namespace BetterTrafficLaws {
                 (PedHash) PedHash.Ranger01SFY,
                 (PedHash) PedHash.Ranger01SMY
             };
-            if (OverspeedHighwayCount > 16) {
+            if (OverspeedHighwayCount > 15) {
                 allowedCops.AddRange(new List<PedHash> {
                     (PedHash) PedHash.Hwaycop01SMY
                 });
@@ -132,25 +138,29 @@ namespace BetterTrafficLaws {
         }
 
         bool IsRunningOnRedLight(Vehicle target) {
-            List<Vehicle> nearbyVehicles = new List<Vehicle>(World.GetNearbyVehicles(Game.Player.Character.Position, 20f))
-                .FindAll(vehicle => vehicle.Driver.Exists() && vehicle.Driver != Game.Player.Character && vehicle.Speed == 0)
-                .FindAll(vehicle => Vector3.Dot(Heading(target), Heading(vehicle)) >= Math.Cos(DegreesToAngle(30f)));
-            List<Vehicle> inFrontOnTrafficLight = nearbyVehicles
-                .FindAll(vehicle => Vector3.Dot(Heading(target), (target.Position - vehicle.Position).Normalized) <
-                    Math.Cos(DegreesToAngle(Math.Min(45f * target.Position.DistanceTo(vehicle.Position) / 7f, 75f))));
-            List<Vehicle> inBackOnTrafficLight = nearbyVehicles
-                .FindAll(vehicle => Vector3.Dot(Heading(target), (target.Position - vehicle.Position).Normalized) > Math.Cos(DegreesToAngle(90f)));
+            try {
+                List<Vehicle> nearbyVehicles = new List<Vehicle>(World.GetNearbyVehicles(Game.Player.Character.Position, 20f))
+                    .FindAll(vehicle => vehicle.Driver.Exists() && vehicle.Driver != Game.Player.Character && vehicle.Speed == 0)
+                    .FindAll(vehicle => Vector3.Dot(Heading(target), Heading(vehicle)) >= Math.Cos(DegreesToAngle(30f)));
+                List<Vehicle> inFrontOnTrafficLight = nearbyVehicles
+                    .FindAll(vehicle => Vector3.Dot(Heading(target), (target.Position - vehicle.Position).Normalized) <
+                        Math.Cos(DegreesToAngle(Math.Min(45f * target.Position.DistanceTo(vehicle.Position) / 7f, 75f))));
+                List<Vehicle> inBackOnTrafficLight = nearbyVehicles
+                    .FindAll(vehicle => Vector3.Dot(Heading(target), (target.Position - vehicle.Position).Normalized) > Math.Cos(DegreesToAngle(90f)));
 
-            if (inFrontOnTrafficLight.Count > 0) return false;
+                if (inFrontOnTrafficLight.Count > 0) return false;
 
-            int votes = 0;
-            foreach (Vehicle v in inBackOnTrafficLight) {
-                if (v.IsStoppedAtTrafficLights) {
-                    votes++;
+                int votes = 0;
+                foreach (Vehicle v in inBackOnTrafficLight) {
+                    if (v.IsStoppedAtTrafficLights) {
+                        votes++;
+                    }
                 }
-            }
 
-            return ((votes > 0.5 * inBackOnTrafficLight.Count) && (target.Speed > 0f));
+                return ((votes > 0.5 * inBackOnTrafficLight.Count) && (target.Speed > 0f));
+            } catch {
+                return false;
+            }
         }
 
         Prop GetNearestTrafficLight() {
@@ -195,22 +205,22 @@ namespace BetterTrafficLaws {
 
         void OnListChange(UIMenu sender, UIMenuListItem listItem, int newIndex) {
             if (listItem == CopsDistance) {
-                Config.SetValue("Configuration", "Cops visibility distance", (float) CopsDistance.Items[CopsDistance.Index]);
+                Config.SetValue("Configuration", "CopsVisibilityDistance", (float) CopsDistance.Items[CopsDistance.Index]);
             }
             if (listItem == StarsToAdd) {
-                Config.SetValue("Configuration", "Stars to add", (int) StarsToAdd.Items[StarsToAdd.Index]);
+                Config.SetValue("Configuration", "StarsToAdd", (int) StarsToAdd.Items[StarsToAdd.Index]);
             }
             if (listItem == SpeedLimit) {
-                Config.SetValue("Configuration", "Speed limit", (float) SpeedLimit.Items[SpeedLimit.Index]);
+                Config.SetValue("Configuration", "SpeedLimit", (float) SpeedLimit.Items[SpeedLimit.Index]);
             }
             if (listItem == SpeedLimitHighway) {
-                Config.SetValue("Configuration", "Speed limit highway", (float) SpeedLimitHighway.Items[SpeedLimitHighway.Index]);
+                Config.SetValue("Configuration", "SpeedLimitHighway", (float) SpeedLimitHighway.Items[SpeedLimitHighway.Index]);
             }
             if (listItem == SpeedFactor) {
-                Config.SetValue("Configuration", "Speed factor", (float) SpeedFactor.Items[SpeedFactor.Index]);
+                Config.SetValue("Configuration", "SpeedFactor", (float) SpeedFactor.Items[SpeedFactor.Index]);
             }
             if (listItem == SpeedUnits) {
-                Config.SetValue("Configuration", "Speed units", (string) SpeedUnits.Items[SpeedUnits.Index]);
+                Config.SetValue("Configuration", "SpeedUnits", (string) SpeedUnits.Items[SpeedUnits.Index]);
             }
 
             Config.Save();
@@ -218,7 +228,7 @@ namespace BetterTrafficLaws {
 
         void MainMenuInit() {
             MenuPool = new MenuPool();
-            MainMenu = new UIMenu("Better Traffic Laws", "Version 1.2.0");
+            MainMenu = new UIMenu("Better Traffic Laws", "Version 1.3.0");
             MenuPool.Add(MainMenu);
 
             Enabled = new UIMenuCheckboxItem("Enabled", true);
