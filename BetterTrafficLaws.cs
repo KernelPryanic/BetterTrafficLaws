@@ -9,8 +9,16 @@ using LemonUI.Menus;
 
 namespace BetterTrafficLaws {
     public static class Logger {
+        private static readonly string LogFilePath = "BetterTrafficLaws.log";
+
+        public static void ClearLog() {
+            if (File.Exists(LogFilePath)) {
+                File.WriteAllText(LogFilePath, string.Empty);
+            }
+        }
+
         public static void LogError(object message) {
-            File.AppendAllText("BetterTrafficLaws.log", DateTime.Now + " [Error] " + message + Environment.NewLine);
+            File.AppendAllText(LogFilePath, DateTime.Now + " [Error] " + message + Environment.NewLine);
         }
     }
 
@@ -28,13 +36,14 @@ namespace BetterTrafficLaws {
         NativeListItem<int> StarsToAdd;
 
         float ConvertedSpeed;
-        int AgainstTrafficCount;
-        int DriveOnPavementCount;
-        int MobilePhoneCount;
-        int WhellieCount;
-        int BurnoutCount;
-        int OverspeedCount;
-        int OverspeedHighwayCount;
+        float SpeedBeforeHit;
+        int LastTimeAgainstTraffic;
+        int LastTimeDriveOnPavement;
+        int LastTimeMobilePhone;
+        int LastTimeWheelie;
+        int LastTimeBurnout;
+        int LastTimeOverspeed;
+        int LastTimeOverspeedHighway;
 
         readonly bool RedLightPenaltyEnabled;
         readonly bool OverspeedingPenaltyEnabled;
@@ -53,33 +62,64 @@ namespace BetterTrafficLaws {
         readonly HashSet<int> TrafficLights = new HashSet<int> { 1043035044, 862871082, -655644382, -730685616, 656557234, 865627822, 589548997 };
 
         public BetterTrafficLaws() {
+            Logger.ClearLog();
             MainMenuInit();
 
             Config = ScriptSettings.Load(@"./scripts/BetterTrafficLaws.ini");
-            Enabled.Checked = Config.GetValue("Configuration", "Enabled", "True") == "True";
 
-            RedLightPenaltyEnabled = Config.GetValue("Configuration", "RedLightPenaltyEnabled", "True") == "True";
-            OverspeedingPenaltyEnabled = Config.GetValue("Configuration", "OverspeedingPenaltyEnabled", "True") == "True";
-            OverspeedingOnHighwayPenaltyEnabled = Config.GetValue("Configuration", "OverspeedingOnHighwayPenaltyEnabled", "True") == "True";
-            DrivingAgainstTrafficPenaltyEnabled = Config.GetValue("Configuration", "DrivingAgainstTrafficPenaltyEnabled", "True") == "True";
-            DrivingOnPavementPenaltyEnabled = Config.GetValue("Configuration", "DrivingOnPavementPenaltyEnabled", "True") == "True";
-            HitPedPenaltyEnabled = Config.GetValue("Configuration", "HitPedPenaltyEnabled", "True") == "True";
-            HitVehiclePenaltyEnabled = Config.GetValue("Configuration", "HitVehiclePenaltyEnabled", "True") == "True";
-            UsingMobilePhonePenaltyEnabled = Config.GetValue("Configuration", "UsingMobilePhonePenaltyEnabled", "True") == "True";
-            DrivingWithoutHelmetPenaltyEnabled = Config.GetValue("Configuration", "DrivingWithoutHelmetPenaltyEnabled", "True") == "True";
-            WheelingPenaltyEnabled = Config.GetValue("Configuration", "WheelingPenaltyEnabled", "True") == "True";
-            BurningOutPenaltyEnabled = Config.GetValue("Configuration", "BurningOutPenaltyEnabled", "True") == "True";
+            // Define default values
+            SetConfigValueIfNotDefined("Configuration", "Enabled", "True");
+            SetConfigValueIfNotDefined("Configuration", "RedLightPenaltyEnabled", "True");
+            SetConfigValueIfNotDefined("Configuration", "OverspeedingPenaltyEnabled", "True");
+            SetConfigValueIfNotDefined("Configuration", "OverspeedingOnHighwayPenaltyEnabled", "True");
+            SetConfigValueIfNotDefined("Configuration", "DrivingAgainstTrafficPenaltyEnabled", "True");
+            SetConfigValueIfNotDefined("Configuration", "DrivingOnPavementPenaltyEnabled", "True");
+            SetConfigValueIfNotDefined("Configuration", "HitPedPenaltyEnabled", "True");
+            SetConfigValueIfNotDefined("Configuration", "HitVehiclePenaltyEnabled", "True");
+            SetConfigValueIfNotDefined("Configuration", "UsingMobilePhonePenaltyEnabled", "True");
+            SetConfigValueIfNotDefined("Configuration", "DrivingWithoutHelmetPenaltyEnabled", "True");
+            SetConfigValueIfNotDefined("Configuration", "WheelingPenaltyEnabled", "True");
+            SetConfigValueIfNotDefined("Configuration", "BurningOutPenaltyEnabled", "True");
+            SetConfigValueIfNotDefined("Configuration", "CopsVisibilityDistance", 75f);
+            SetConfigValueIfNotDefined("Configuration", "StarsToAdd", 1);
+            SetConfigValueIfNotDefined("Configuration", "SpeedLimit", 60f);
+            SetConfigValueIfNotDefined("Configuration", "SpeedLimitHighway", 120f);
+            SetConfigValueIfNotDefined("Configuration", "SpeedFactor", 1f);
+            SetConfigValueIfNotDefined("Configuration", "SpeedUnits", "KPH");
+            SetConfigValueIfNotDefined("Configuration", "MenuKey", Keys.B.ToString());
+
+            Enabled.Checked = Config.GetValue("Configuration", "Enabled", true) == true;
+            RedLightPenaltyEnabled = Config.GetValue("Configuration", "RedLightPenaltyEnabled", true) == true;
+            OverspeedingPenaltyEnabled = Config.GetValue("Configuration", "OverspeedingPenaltyEnabled", true) == true;
+            OverspeedingOnHighwayPenaltyEnabled = Config.GetValue("Configuration", "OverspeedingOnHighwayPenaltyEnabled", true) == true;
+            DrivingAgainstTrafficPenaltyEnabled = Config.GetValue("Configuration", "DrivingAgainstTrafficPenaltyEnabled", true) == true;
+            DrivingOnPavementPenaltyEnabled = Config.GetValue("Configuration", "DrivingOnPavementPenaltyEnabled", true) == true;
+            HitPedPenaltyEnabled = Config.GetValue("Configuration", "HitPedPenaltyEnabled", true) == true;
+            HitVehiclePenaltyEnabled = Config.GetValue("Configuration", "HitVehiclePenaltyEnabled", true) == true;
+            UsingMobilePhonePenaltyEnabled = Config.GetValue("Configuration", "UsingMobilePhonePenaltyEnabled", true) == true;
+            DrivingWithoutHelmetPenaltyEnabled = Config.GetValue("Configuration", "DrivingWithoutHelmetPenaltyEnabled", true) == true;
+            WheelingPenaltyEnabled = Config.GetValue("Configuration", "WheelingPenaltyEnabled", true) == true;
+            BurningOutPenaltyEnabled = Config.GetValue("Configuration", "BurningOutPenaltyEnabled", true) == true;
 
             CopsDistance.SelectedIndex = CopsDistance.Items.FindIndex(x => x == Config.GetValue("Configuration", "CopsVisibilityDistance", 75f));
             StarsToAdd.SelectedIndex = StarsToAdd.Items.FindIndex(x => x == Config.GetValue("Configuration", "StarsToAdd", 1));
-            SpeedLimit.SelectedIndex = SpeedLimit.Items.FindIndex(x => x == Config.GetValue("Configuration", "SpeedLimit", 40f));
-            SpeedLimitHighway.SelectedIndex = SpeedLimitHighway.Items.FindIndex(x => x == Config.GetValue("Configuration", "SpeedLimitHighway", 90f));
+            SpeedLimit.SelectedIndex = SpeedLimit.Items.FindIndex(x => x == Config.GetValue("Configuration", "SpeedLimit", 60f));
+            SpeedLimitHighway.SelectedIndex = SpeedLimitHighway.Items.FindIndex(x => x == Config.GetValue("Configuration", "SpeedLimitHighway", 120f));
             SpeedFactor.SelectedIndex = SpeedFactor.Items.FindIndex(x => x == Config.GetValue("Configuration", "SpeedFactor", 1f));
-            SpeedUnits.SelectedIndex = SpeedUnits.Items.FindIndex(x => x == Config.GetValue("Configuration", "SpeedUnits", "KMH"));
+            SpeedUnits.SelectedIndex = SpeedUnits.Items.FindIndex(x => x == Config.GetValue("Configuration", "SpeedUnits", "KPH"));
             OpenMenu = Config.GetValue("Configuration", "MenuKey", Keys.B);
 
             Tick += OnTick;
             KeyUp += OnKeyUp;
+        }
+
+        private void SetConfigValueIfNotDefined<T>(string section, string key, T defaultValue) {
+            var currentValue = Config.GetValue(section, key, default(T));
+            // Only set the default value if the current value is equal to the default value of the type
+            if (EqualityComparer<T>.Default.Equals(currentValue, default)) {
+                Config.SetValue(section, key, defaultValue);
+                Config.Save();
+            }
         }
 
         void OnTick(object sender, EventArgs eventArgs) {
@@ -99,14 +139,14 @@ namespace BetterTrafficLaws {
                 if (!Enabled.Checked || Game.Player == null || Game.Player.WantedLevel > 0 || !Game.Player.Character.IsInVehicle()) return;
                 currentVehicle = Game.Player.Character.CurrentVehicle;
                 if (!currentVehicle.GetPedOnSeat(VehicleSeat.Driver).Equals(Game.Player.Character) || currentVehicle.Model.IsBicycle) return;
-                ConvertedSpeed = SpeedUnits.SelectedItem == "KMH" ? ToKMH(currentVehicle.Speed) : ToMPH(currentVehicle.Speed);
+                ConvertedSpeed = SpeedUnits.SelectedItem == "KPH" ? ToKPH(currentVehicle.Speed) : ToMPH(currentVehicle.Speed);
             } catch (Exception e) {
                 Logger.LogError(e.StackTrace.ToString());
                 return;
             }
 
             if (!IsRunningOnRedLight(currentVehicle) && !IsDrivingAgainstTraffic() && !IsDrivingOnPavement() &&
-                !HitPed() && !HitVehicle(currentVehicle) &&
+                !HitPed() && !HitVehicle() &&
                 !IsUsingMobilePhone() && !IsDrivingWithoutHelmet(currentVehicle) &&
                 !IsWheeling(currentVehicle) && !IsBurningOut(currentVehicle) && !IsOverspeeding())
                 return;
@@ -125,9 +165,26 @@ namespace BetterTrafficLaws {
             }
             Ped[] nearbyPeds = World.GetNearbyPeds(Game.Player.Character.Position, CopsDistance.SelectedItem);
             foreach (Ped p in nearbyPeds) {
-                if (!allowedCops.Contains((PedHash)p.Model.Hash)) continue;
-                if (Math.Abs(Game.Player.Character.Position.Z - p.Position.Z) < 20f)
+                if (!allowedCops.Contains((PedHash)p.Model.Hash) || p.IsDead) continue;
+
+                // Calculate the direction from the cop to the player
+                Vector3 directionToPlayer = (Game.Player.Character.Position - p.Position).Normalized;
+
+                // Get the cop's forward vector
+                Vector3 copForwardVector = p.ForwardVector;
+
+                // Check if the cop is facing the player
+                float dotProduct = Vector3.Dot(directionToPlayer, copForwardVector);
+                if (dotProduct < Math.Cos(DegreesToAngle(60f))) continue;
+
+                // Perform a line-of-sight check
+                RaycastResult raycast = World.Raycast(p.Position, Game.Player.Character.Position, IntersectFlags.Everything);
+
+                // Check if the ray hits the player
+                if (raycast.HitEntity != null && (raycast.HitEntity.Handle == currentVehicle.Handle || raycast.HitEntity.Handle == Game.Player.Character.Handle)) {
                     Game.Player.WantedLevel = StarsToAdd.SelectedItem;
+                    break; // Exit the loop once a visible cop has been found
+                }
             }
         }
 
@@ -150,7 +207,7 @@ namespace BetterTrafficLaws {
                     if (v.IsStoppedAtTrafficLights) votes++;
                 }
 
-                return (votes > 0.5 * inBackOnTrafficLight.Count) && (vehicle.Speed > 0f);
+                return (votes > 0.5 * inBackOnTrafficLight.Count) && (ConvertedSpeed > 5);
             } catch {
                 return false;
             }
@@ -158,91 +215,72 @@ namespace BetterTrafficLaws {
 
         bool IsOverspeeding() {
             if (!OverspeedingPenaltyEnabled) return false;
-            if (ConvertedSpeed > SpeedLimit.SelectedItem)
-                OverspeedCount++;
-            else
-                OverspeedCount = 0;
-            if (OverspeedCount > 15) return true;
-            return false;
+            if (ConvertedSpeed <= SpeedLimit.SelectedItem)
+                LastTimeOverspeed = Game.GameTime;
+            return Game.GameTime - LastTimeOverspeed > 2000;
         }
 
         bool IsOverspeedingOnHighway() {
             if (!OverspeedingOnHighwayPenaltyEnabled) return false;
-            if (ConvertedSpeed > SpeedLimitHighway.SelectedItem)
-                OverspeedHighwayCount++;
-            else
-                OverspeedHighwayCount = 0;
-            if (OverspeedHighwayCount > 15) return true;
-            return false;
+            if (ConvertedSpeed <= SpeedLimitHighway.SelectedItem)
+                LastTimeOverspeedHighway = Game.GameTime;
+            return Game.GameTime - LastTimeOverspeedHighway > 2000;
         }
 
         bool IsDrivingAgainstTraffic() {
             if (!DrivingAgainstTrafficPenaltyEnabled) return false;
-            if (Function.Call<int>(Hash.GET_TIME_SINCE_PLAYER_DROVE_AGAINST_TRAFFIC, Game.Player) == 0)
-                AgainstTrafficCount++;
-            else
-                AgainstTrafficCount = 0;
-            if (AgainstTrafficCount > 15) return true;
-            return false;
+            if (Function.Call<int>(Hash.GET_TIME_SINCE_PLAYER_DROVE_AGAINST_TRAFFIC, Game.Player) != 0)
+                LastTimeAgainstTraffic = Game.GameTime;
+            return Game.GameTime - LastTimeAgainstTraffic > 2000;
         }
 
         bool IsDrivingOnPavement() {
             if (!DrivingOnPavementPenaltyEnabled) return false;
-            if (Function.Call<int>(Hash.GET_TIME_SINCE_PLAYER_DROVE_ON_PAVEMENT, Game.Player) == 0)
-                DriveOnPavementCount++;
-            else
-                DriveOnPavementCount = 0;
-            if (DriveOnPavementCount > 15) return true;
-            return false;
+            if (Function.Call<int>(Hash.GET_TIME_SINCE_PLAYER_DROVE_ON_PAVEMENT, Game.Player) != 0)
+                LastTimeDriveOnPavement = Game.GameTime;
+            return Game.GameTime - LastTimeDriveOnPavement > 2000;
         }
 
         bool HitPed() {
             if (!HitPedPenaltyEnabled) return false;
             int timeSinceHitPed = Function.Call<int>(Hash.GET_TIME_SINCE_PLAYER_HIT_PED, Game.Player);
-            return !(timeSinceHitPed < 0 || timeSinceHitPed > 200);
+            return !(timeSinceHitPed < 0 || timeSinceHitPed > 500);
         }
 
-        bool HitVehicle(Vehicle vehicle) {
+        bool HitVehicle() {
             if (!HitVehiclePenaltyEnabled) return false;
             int timeSinceHitVehicle = Function.Call<int>(Hash.GET_TIME_SINCE_PLAYER_HIT_VEHICLE, Game.Player);
-            return !(timeSinceHitVehicle < 0 || timeSinceHitVehicle > 200 || Math.Abs(vehicle.Speed) <= 2);
+            bool hit = !(timeSinceHitVehicle < 0 || timeSinceHitVehicle > 500 || Math.Abs(SpeedBeforeHit) <= 10);
+            if (!hit)
+                SpeedBeforeHit = ConvertedSpeed;
+            return hit;
         }
 
         bool IsUsingMobilePhone() {
             if (!UsingMobilePhonePenaltyEnabled) return false;
-            if (Function.Call<bool>(Hash.IS_PED_RUNNING_MOBILE_PHONE_TASK, Game.Player.Character))
-                MobilePhoneCount++;
-            else
-                MobilePhoneCount = 0;
-            if (MobilePhoneCount > 15) return true;
-            return false;
+            if (!Function.Call<bool>(Hash.IS_PED_RUNNING_MOBILE_PHONE_TASK, Game.Player.Character))
+                LastTimeMobilePhone = Game.GameTime;
+            return Game.GameTime - LastTimeMobilePhone > 3000;
         }
 
         bool IsDrivingWithoutHelmet(Vehicle vehicle) {
             if (!DrivingWithoutHelmetPenaltyEnabled) return false;
-            if (vehicle.Model.IsBike && vehicle.Speed > 2 && !Game.Player.Character.IsWearingHelmet) return true;
+            if (vehicle.Model.IsBike && ConvertedSpeed > 10 && !Game.Player.Character.IsWearingHelmet) return true;
             return false;
         }
 
         bool IsWheeling(Vehicle vehicle) {
             if (!WheelingPenaltyEnabled) return false;
-            if (vehicle.Model.IsBike && !vehicle.IsInAir && !vehicle.IsOnAllWheels) {
-                WhellieCount++;
-                if (WhellieCount > 15) return true;
-                return false;
-            }
-            WhellieCount = 0;
-            return false;
+            if (!(vehicle.Model.IsBike && !vehicle.IsInAir && !vehicle.IsOnAllWheels))
+                LastTimeWheelie = Game.GameTime;
+            return Game.GameTime - LastTimeWheelie > 3000;
         }
 
         bool IsBurningOut(Vehicle vehicle) {
             if (!BurningOutPenaltyEnabled) return false;
-            if (Function.Call<bool>(Hash.IS_VEHICLE_IN_BURNOUT, vehicle))
-                BurnoutCount++;
-            else
-                BurnoutCount = 0;
-            if (BurnoutCount > 25) return true;
-            return false;
+            if (!Function.Call<bool>(Hash.IS_VEHICLE_IN_BURNOUT, vehicle))
+                LastTimeBurnout = Game.GameTime;
+            return Game.GameTime - LastTimeBurnout > 3000;
         }
 
         // Deprecated
@@ -266,7 +304,7 @@ namespace BetterTrafficLaws {
             return speed * 2.23694f * SpeedFactor.SelectedItem;
         }
 
-        public float ToKMH(float speed) {
+        public float ToKPH(float speed) {
             return speed * 3.6f * SpeedFactor.SelectedItem;
         }
 
@@ -278,8 +316,7 @@ namespace BetterTrafficLaws {
 
         void OnCheckboxChange(object sender, EventArgs e) {
             if (sender == Enabled) {
-                string value = Enabled.Checked ? "True" : "False";
-                Config.SetValue("Configuration", "Enabled", value);
+                Config.SetValue("Configuration", "Enabled", Enabled.Checked);
             }
 
             Config.Save();
@@ -319,30 +356,42 @@ namespace BetterTrafficLaws {
         }
 
         void MainMenuInit() {
-            MainMenu = new NativeMenu("Better Traffic Laws", "Version 2.0.2");
+            MainMenu = new NativeMenu("Better Traffic Laws", "Version 2.1.0");
 
-            Enabled = new NativeCheckboxItem("Enabled", true);
+            Enabled = new NativeCheckboxItem("Enabled");
             MainMenu.Add(Enabled);
 
-            CopsDistance = new NativeListItem<float>("Cops visibility distance", 20f, 25f, 30f, 35f, 40f, 45f, 50f, 55f, 60f, 65f, 70f, 75f, 80f, 85f, 90f, 95f, 100f);
+            CopsDistance = new NativeListItem<float>(
+                "Cops Visibility Distance",
+                20f, 25f, 30f, 35f, 40f, 45f, 50f, 55f, 60f, 65f, 70f, 75f, 80f, 85f, 90f, 95f, 100f, 105f, 110f, 115f, 120f
+            );
             MainMenu.Add(CopsDistance);
 
-            StarsToAdd = new NativeListItem<int>("Stars to add", 1, 2, 3, 4, 5);
+            StarsToAdd = new NativeListItem<int>("Stars To Add", 1, 2, 3, 4, 5);
             MainMenu.Add(StarsToAdd);
 
-            SpeedLimit = new NativeListItem<float>("Speed limit", 10f, 20f, 30f, 40f, 50f, 60f, 70f, 80f, 90f, 100f, 110f, 120f, 130f, 140f, 150f, 160f, 170f, 180f, 190f, 200f);
+            SpeedLimit = new NativeListItem<float>(
+                "Speed Limit",
+                10f, 20f, 30f, 40f, 50f, 60f, 70f, 80f, 90f, 100f, 110f, 120f, 130f, 140f, 150f, 160f, 170f, 180f, 190f, 200f
+            );
             MainMenu.Add(SpeedLimit);
 
-            SpeedLimitHighway = new NativeListItem<float>("Speed limit highway", 10f, 20f, 30f, 40f, 50f, 60f, 70f, 80f, 90f, 100f, 110f, 120f, 130f, 140f, 150f, 160f, 170f, 180f, 190f, 200f);
+            SpeedLimitHighway = new NativeListItem<float>(
+                "Speed Limit Highway",
+                10f, 20f, 30f, 40f, 50f, 60f, 70f, 80f, 90f, 100f, 110f, 120f, 130f, 140f, 150f, 160f, 170f, 180f, 190f, 200f
+            );
             MainMenu.Add(SpeedLimitHighway);
 
-            SpeedFactor = new NativeListItem<float>("Speed factor", 0.1f, 0.2f, 0.3f, 0.4f, 0.5f, 0.6f, 0.7f, 0.8f, 0.9f, 1f, 1.1f, 1.2f, 1.3f, 1.4f, 1.5f, 1.6f, 1.7f, 1.8f, 1.9f, 2f);
+            SpeedFactor = new NativeListItem<float>(
+                "Speed Factor",
+                0.1f, 0.2f, 0.3f, 0.4f, 0.5f, 0.6f, 0.7f, 0.8f, 0.9f, 1f, 1.1f, 1.2f, 1.3f, 1.4f, 1.5f, 1.6f, 1.7f, 1.8f, 1.9f, 2f
+            );
             MainMenu.Add(SpeedFactor);
 
-            SpeedUnits = new NativeListItem<string>("Speed units", "KMH", "MPH");
+            SpeedUnits = new NativeListItem<string>("Speed Units", "", "KPH", "MPH");
             MainMenu.Add(SpeedUnits);
 
-            Enabled.Activated += OnCheckboxChange;
+            Enabled.CheckboxChanged += OnCheckboxChange;
             CopsDistance.ItemChanged += OnListChange;
             StarsToAdd.ItemChanged += OnListChange;
             SpeedLimit.ItemChanged += OnListChange;
