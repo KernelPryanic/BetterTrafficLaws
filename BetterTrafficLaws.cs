@@ -136,9 +136,11 @@ namespace BetterTrafficLaws {
 
             Vehicle currentVehicle;
             try {
-                if (!Enabled.Checked || Game.Player == null || Game.Player.WantedLevel > 0 || !Game.Player.Character.IsInVehicle()) return;
+                if (!Enabled.Checked || Game.Player == null || Game.Player.WantedLevel >= StarsToAdd.SelectedItem || !Game.Player.Character.IsInVehicle()) return;
                 currentVehicle = Game.Player.Character.CurrentVehicle;
-                if (!currentVehicle.GetPedOnSeat(VehicleSeat.Driver).Equals(Game.Player.Character) || currentVehicle.Model.IsBicycle) return;
+                if (!currentVehicle.GetPedOnSeat(VehicleSeat.Driver).Equals(Game.Player.Character) ||
+                        currentVehicle.Model.IsBicycle || currentVehicle.Model.IsBoat || currentVehicle.Model.IsHelicopter ||
+                            currentVehicle.Model.IsPlane || currentVehicle.Model.IsTrain) return;
                 ConvertedSpeed = SpeedUnits.SelectedItem == "KPH" ? ToKPH(currentVehicle.Speed) : ToMPH(currentVehicle.Speed);
             } catch (Exception e) {
                 Logger.LogError(e.StackTrace.ToString());
@@ -356,7 +358,7 @@ namespace BetterTrafficLaws {
         }
 
         void MainMenuInit() {
-            MainMenu = new NativeMenu("Better Traffic Laws", "Version 2.1.0");
+            MainMenu = new NativeMenu("Better Traffic Laws", "Version 3.0.1");
 
             Enabled = new NativeCheckboxItem("Enabled");
             MainMenu.Add(Enabled);
