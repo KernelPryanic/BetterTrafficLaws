@@ -260,7 +260,7 @@ namespace BetterTrafficLaws {
 
         bool IsUsingMobilePhone() {
             if (!UsingMobilePhonePenaltyEnabled) return false;
-            if (!Function.Call<bool>(Hash.IS_PED_RUNNING_MOBILE_PHONE_TASK, Game.Player.Character))
+            if (ConvertedSpeed == 0 || !Function.Call<bool>(Hash.IS_PED_RUNNING_MOBILE_PHONE_TASK, Game.Player.Character))
                 LastTimeMobilePhone = Game.GameTime;
             return Game.GameTime - LastTimeMobilePhone > 3000;
         }
@@ -358,7 +358,7 @@ namespace BetterTrafficLaws {
         }
 
         void MainMenuInit() {
-            MainMenu = new NativeMenu("Better Traffic Laws", "Version 3.0.1");
+            MainMenu = new NativeMenu("Better Traffic Laws", "Version 3.0.2");
 
             Enabled = new NativeCheckboxItem("Enabled");
             MainMenu.Add(Enabled);
