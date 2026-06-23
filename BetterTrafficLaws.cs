@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Reflection;
 using System.Windows.Forms;
 using GTA;
 using GTA.Math;
@@ -8,22 +9,45 @@ using GTA.Native;
 using LemonUI.Menus;
 
 namespace BetterTrafficLaws {
+    // Resolves paths next to the loaded DLL (the scripts/ folder) rather than
+    // against the process CWD, which for the game is the root folder where
+    // GTA5.exe lives. SHVDN3 loads scripts in place, so Assembly.Location is the
+    // real scripts/ path; falling back to the relative name keeps it working if
+    // a host ever shadow-copies the assembly to a temp dir.
+    public static class ScriptPaths {
+        public static readonly string Directory =
+            Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location)
+                ?? AppDomain.CurrentDomain.BaseDirectory;
+
+        public static string For(string fileName) => Path.Combine(Directory, fileName);
+    }
+
     public static class Logger {
-        private static readonly string LogFilePath = "BetterTrafficLaws.log";
+        static readonly string LogFilePath = ScriptPaths.For("BetterTrafficLaws.log");
 
         public static void ClearLog() {
-            if (File.Exists(LogFilePath)) {
-                File.WriteAllText(LogFilePath, string.Empty);
+            try {
+                if (File.Exists(LogFilePath)) {
+                    File.WriteAllText(LogFilePath, string.Empty);
+                }
+            } catch {
+                // Logging must never crash the script; a locked/unwritable log is
+                // not worth taking the mod down for.
             }
         }
 
         public static void LogError(object message) {
-            File.AppendAllText(LogFilePath, DateTime.Now + " [Error] " + message + Environment.NewLine);
+            try {
+                File.AppendAllText(LogFilePath, DateTime.Now + " [Error] " + message + Environment.NewLine);
+            } catch {
+                // See ClearLog: swallow file-IO failures by design.
+            }
         }
     }
 
     class BetterTrafficLaws : Script {
         readonly ScriptSettings Config;
+        readonly string ConfigPath;
         readonly Keys OpenMenu;
 
         NativeMenu MainMenu;
@@ -59,13 +83,12 @@ namespace BetterTrafficLaws {
 
         int Period;
 
-        readonly HashSet<int> TrafficLights = new HashSet<int> { 1043035044, 862871082, -655644382, -730685616, 656557234, 865627822, 589548997 };
-
         public BetterTrafficLaws() {
             Logger.ClearLog();
             MainMenuInit();
 
-            Config = ScriptSettings.Load(@"./scripts/BetterTrafficLaws.ini");
+            ConfigPath = ScriptPaths.For("BetterTrafficLaws.ini");
+            Config = ScriptSettings.Load(ConfigPath);
 
             // Define default values
             SetConfigValueIfNotDefined("Configuration", "Enabled", "True");
@@ -114,9 +137,12 @@ namespace BetterTrafficLaws {
         }
 
         private void SetConfigValueIfNotDefined<T>(string section, string key, T defaultValue) {
-            var currentValue = Config.GetValue(section, key, default(T));
-            // Only set the default value if the current value is equal to the default value of the type
-            if (EqualityComparer<T>.Default.Equals(currentValue, default)) {
+            // Detect key *presence*, not value: comparing against default(T) wrongly
+            // treats a user's "False"/0 as absent and resets it every launch (so
+            // e.g. Enabled=False could never persist). ScriptSettings has no
+            // ContainsKey, so probe with two distinct string sentinels — if the key
+            // exists both reads return its value; if not, each returns its sentinel.
+            if (Config.GetValue(section, key, "\0__a") != Config.GetValue(section, key, "\0__b")) {
                 Config.SetValue(section, key, defaultValue);
                 Config.Save();
             }
@@ -127,6 +153,10 @@ namespace BetterTrafficLaws {
                 MainMenu.Process();
             }
 
+            // Throttle the checks to every 6th tick — the nearby-entity scans and
+            // raycasts below are too expensive to run every frame. Note the
+            // violation predicates measure Game.GameTime deltas, so their windows
+            // are sampled at this coarser rate, not per-frame.
             if (Period < 5) {
                 Period++;
                 return;
@@ -136,14 +166,16 @@ namespace BetterTrafficLaws {
 
             Vehicle currentVehicle;
             try {
-                if (!Enabled.Checked || Game.Player == null || Game.Player.WantedLevel >= StarsToAdd.SelectedItem || !Game.Player.Character.IsInVehicle()) return;
+                if (!Enabled.Checked || Game.Player == null || Game.Player.Wanted.WantedLevel >= StarsToAdd.SelectedItem || !Game.Player.Character.IsInVehicle()) return;
                 currentVehicle = Game.Player.Character.CurrentVehicle;
                 if (!currentVehicle.GetPedOnSeat(VehicleSeat.Driver).Equals(Game.Player.Character) ||
                         currentVehicle.Model.IsBicycle || currentVehicle.Model.IsBoat || currentVehicle.Model.IsHelicopter ||
                             currentVehicle.Model.IsPlane || currentVehicle.Model.IsTrain) return;
                 ConvertedSpeed = SpeedUnits.SelectedItem == "KPH" ? ToKPH(currentVehicle.Speed) : ToMPH(currentVehicle.Speed);
             } catch (Exception e) {
-                Logger.LogError(e.StackTrace.ToString());
+                // e.ToString() — not e.StackTrace, which is null for a freshly
+                // thrown exception and would NRE us right here inside the catch.
+                Logger.LogError(e);
                 return;
             }
 
@@ -167,25 +199,28 @@ namespace BetterTrafficLaws {
             }
             Ped[] nearbyPeds = World.GetNearbyPeds(Game.Player.Character.Position, CopsDistance.SelectedItem);
             foreach (Ped p in nearbyPeds) {
-                if (!allowedCops.Contains((PedHash)p.Model.Hash) || p.IsDead) continue;
+                try {
+                    if (!allowedCops.Contains((PedHash)p.Model.Hash) || p.IsDead) continue;
 
-                // Calculate the direction from the cop to the player
-                Vector3 directionToPlayer = (Game.Player.Character.Position - p.Position).Normalized;
+                    // Only count a cop who is facing the player (within a 60° cone)...
+                    Vector3 directionToPlayer = (Game.Player.Character.Position - p.Position).Normalized;
+                    float dotProduct = Vector3.Dot(directionToPlayer, p.ForwardVector);
+                    if (dotProduct < Math.Cos(DegreesToAngle(60f))) continue;
 
-                // Get the cop's forward vector
-                Vector3 copForwardVector = p.ForwardVector;
-
-                // Check if the cop is facing the player
-                float dotProduct = Vector3.Dot(directionToPlayer, copForwardVector);
-                if (dotProduct < Math.Cos(DegreesToAngle(60f))) continue;
-
-                // Perform a line-of-sight check
-                RaycastResult raycast = World.Raycast(p.Position, Game.Player.Character.Position, IntersectFlags.Everything);
-
-                // Check if the ray hits the player
-                if (raycast.HitEntity != null && (raycast.HitEntity.Handle == currentVehicle.Handle || raycast.HitEntity.Handle == Game.Player.Character.Handle)) {
-                    Game.Player.WantedLevel = StarsToAdd.SelectedItem;
-                    break; // Exit the loop once a visible cop has been found
+                    // ...and has line of sight to the player or their vehicle.
+                    RaycastResult raycast = World.Raycast(p.Position, Game.Player.Character.Position, IntersectFlags.Everything);
+                    if (raycast.HitEntity != null && (raycast.HitEntity.Handle == currentVehicle.Handle || raycast.HitEntity.Handle == Game.Player.Character.Handle)) {
+                        // SetWantedLevel queues the change; ApplyWantedLevelChangeNow
+                        // makes it take effect this frame instead of after the game's
+                        // internal delay. false = singleplayer.
+                        Game.Player.Wanted.SetWantedLevel(StarsToAdd.SelectedItem, false);
+                        Game.Player.Wanted.ApplyWantedLevelChangeNow(false);
+                        break; // A visible cop is enough; stop scanning.
+                    }
+                } catch {
+                    // A ped can despawn mid-scan, invalidating its handle; skip it
+                    // rather than letting one stale entity throw out of OnTick.
+                    continue;
                 }
             }
         }
@@ -252,6 +287,9 @@ namespace BetterTrafficLaws {
         bool HitVehicle() {
             if (!HitVehiclePenaltyEnabled) return false;
             int timeSinceHitVehicle = Function.Call<int>(Hash.GET_TIME_SINCE_PLAYER_HIT_VEHICLE, Game.Player);
+            // SpeedBeforeHit holds the speed from the previous check (it's only
+            // refreshed when no hit is detected), so a hit is judged by how fast we
+            // were going just before impact — this ignores gentle taps at low speed.
             bool hit = !(timeSinceHitVehicle < 0 || timeSinceHitVehicle > 500 || Math.Abs(SpeedBeforeHit) <= 10);
             if (!hit)
                 SpeedBeforeHit = ConvertedSpeed;
@@ -285,15 +323,6 @@ namespace BetterTrafficLaws {
             return Game.GameTime - LastTimeBurnout > 3000;
         }
 
-        // Deprecated
-        Prop GetNearestTrafficLight() {
-            Prop[] nearbyProps = World.GetNearbyProps(Game.Player.Character.Position, 40f);
-            foreach (Prop p in nearbyProps) {
-                if (TrafficLights.Contains(p.Model.Hash)) return p;
-            }
-            return null;
-        }
-
         Vector3 Heading(Entity entity) {
             return (0.5f * entity.ForwardVector.Normalized + 0.5f * entity.Velocity.Normalized).Normalized;
         }
@@ -311,7 +340,7 @@ namespace BetterTrafficLaws {
         }
 
         void OnKeyUp(object sender, KeyEventArgs e) {
-            if (e.KeyCode == OpenMenu && !MainMenu.Visible) {
+            if (e.KeyCode == OpenMenu) {
                 MainMenu.Visible = !MainMenu.Visible;
             }
         }
@@ -358,7 +387,7 @@ namespace BetterTrafficLaws {
         }
 
         void MainMenuInit() {
-            MainMenu = new NativeMenu("Better Traffic Laws", "Version 3.0.2");
+            MainMenu = new NativeMenu("Better Traffic Laws", "Version 3.0.3");
 
             Enabled = new NativeCheckboxItem("Enabled");
             MainMenu.Add(Enabled);
