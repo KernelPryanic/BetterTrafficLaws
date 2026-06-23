@@ -1,0 +1,50 @@
+{
+  // MSBuild path is Visual Studio 2022 Community's. Adjust the "command" if your
+  // VS edition/year differs (e.g. Professional/Enterprise, or 2019).
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "build (Release x64)",
+      "type": "process",
+      "command": "C:/Program Files/Microsoft Visual Studio/2022/Community/MSBuild/Current/Bin/MSBuild.exe",
+      "args": [
+        "Better Traffic Laws.csproj",
+        "-p:Configuration=Release",
+        "-p:Platform=x64",
+        "-v:minimal",
+        "-nologo"
+      ],
+      "group": { "kind": "build", "isDefault": true },
+      "problemMatcher": "$msCompile",
+      "presentation": { "reveal": "always", "clear": true }
+    },
+    {
+      "label": "build (Debug x64)",
+      "type": "process",
+      "command": "C:/Program Files/Microsoft Visual Studio/2022/Community/MSBuild/Current/Bin/MSBuild.exe",
+      "args": [
+        "Better Traffic Laws.csproj",
+        "-p:Configuration=Debug",
+        "-p:Platform=x64",
+        "-v:minimal",
+        "-nologo"
+      ],
+      "group": "build",
+      "problemMatcher": "$msCompile",
+      "presentation": { "reveal": "always", "clear": true }
+    },
+    {
+      "label": "clean",
+      "type": "process",
+      "command": "C:/Program Files/Microsoft Visual Studio/2022/Community/MSBuild/Current/Bin/MSBuild.exe",
+      "args": [
+        "Better Traffic Laws.csproj",
+        "-t:Clean",
+        "-p:Configuration=Release",
+        "-p:Platform=x64",
+        "-nologo"
+      ],
+      "problemMatcher": []
+    }
+  ]
+}
