@@ -14,9 +14,18 @@ PLATFORM    ?= x64
 
 # Mod identity / packaging. DLL name is the AssemblyName.
 DLL         := BetterTrafficLaws.dll
+MOD_NAME    := Better Traffic Laws
 DIST        := dist
-STAGE       := $(DIST)/scripts
+STAGE       := $(DIST)
+SCRIPTS     := $(DIST)/scripts
 ZIP         := $(DIST)/BetterTrafficLaws.zip
+
+# Version is read from the csproj so it has a single source of truth. It is
+# written into gta5mod.json in the package so the Vortex GTA5 extension can show
+# the mod's version (local mods otherwise display a blank version + warning).
+# The csproj carries a 4-part version (3.0.4.0); trim the trailing .0 to the
+# semver form (3.0.4) that Vortex and gta5-mods.com expect.
+VERSION     := $(shell sed -n 's:.*<Version>\(.*\)</Version>.*:\1:p' "$(PROJECT)" | head -1 | sed 's:\.0$$::')
 
 # DLLs the player already has from their ScriptHookV .NET install - referenced
 # (SpecificVersion=False, not Private) but must NOT be bundled. This mod has no
@@ -50,19 +59,22 @@ rebuild: ## clean then build
 	$(MSB) -t:Rebuild
 
 package: build ## build, then zip a gta5-mods.com-ready archive into dist/
-	@rm -rf "$(STAGE)" "$(ZIP)"
-	@mkdir -p "$(STAGE)"
+	@test -n "$(VERSION)" || { echo "could not read <Version> from $(PROJECT)"; exit 1; }
+	@rm -rf "$(SCRIPTS)" "$(STAGE)/gta5mod.json" "$(ZIP)"
+	@mkdir -p "$(SCRIPTS)"
 	@# Ship the mod DLL plus any dependency the build emitted (Private refs),
 	@# excluding the assemblies that come from the player's SHVDN/LemonUI install.
 	@for dll in bin/$(CONFIG)/*.dll; do \
 		name=$$(basename "$$dll"); \
 		case " $(PLAYER_PROVIDED) " in *" $$name "*) continue;; esac; \
-		cp "$$dll" "$(STAGE)/"; \
+		cp "$$dll" "$(SCRIPTS)/"; \
 	done
-	@test -f "$(STAGE)/$(DLL)" || { echo "build output missing $(DLL)"; exit 1; }
-	@powershell -NoProfile -Command "Compress-Archive -Path '$(DIST)/scripts' -DestinationPath '$(ZIP)' -Force"
-	@rm -rf "$(STAGE)"
-	@echo "packaged $(ZIP):"
+	@test -f "$(SCRIPTS)/$(DLL)" || { echo "build output missing $(DLL)"; exit 1; }
+	@# Mod metadata read by the Vortex GTA5 extension (version/name); not deployed
+	@# into the game. Lives at the archive root, alongside scripts/.
+	@printf '{\n  "name": "%s",\n  "version": "%s"\n}\n' "$(MOD_NAME)" "$(VERSION)" > "$(STAGE)/gta5mod.json"
+	@powershell -NoProfile -Command "Compress-Archive -Path '$(DIST)/scripts','$(DIST)/gta5mod.json' -DestinationPath '$(ZIP)' -Force"
+	@echo "packaged $(ZIP) (v$(VERSION)):"
 	@powershell -NoProfile -Command "Add-Type -A System.IO.Compression.FileSystem; [IO.Compression.ZipFile]::OpenRead((Resolve-Path '$(ZIP)')).Entries | ForEach-Object { '  ' + \$$_.FullName }"
 
 clean: ## remove build output (bin/, obj/, dist/)
