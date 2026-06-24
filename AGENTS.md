@@ -129,10 +129,15 @@ not tied to any one mod — and apply to every mod of this shape in this workspa
   best-effort per-item operation where there is genuinely nothing to do with the
   failure (and even then, prefer logging) — e.g. per-property capture/restore loops
   that catch-and-log per item so one bad entry doesn't abort the whole operation.
-- Diagnostics go to the mod's own log file (next to the DLL, cleared on startup)
-  via a `Logger` helper, not anywhere that depends on a console the player doesn't
-  have. The logger itself must swallow file-IO failures — a locked or unwritable
-  log must never crash the mod.
+- Diagnostics go to the mod's own log file (in a writable data folder outside the
+  game tree — see below — cleared on startup) via a `Logger` helper, not anywhere
+  that depends on a console the player doesn't have. The logger itself must swallow
+  file-IO failures — a locked or unwritable log must never crash the mod.
+- On GTA V Enhanced the native ScriptHookV host opens every file already present
+  under the game folder at launch (root, `scripts\`, and subfolders) with a lock
+  held for the whole session, so those files can't be rewritten — the classic
+  "log won't update / settings don't persist" bug. Write runtime files (log, INI,
+  any persisted state) OUTSIDE the game tree, e.g. `%APPDATA%\<Game>\<Vendor>\<Mod>\`.
 - Fail fast on programmer errors; don't add defensive fallbacks that hide bugs.
 
 ## Build / lint / test
