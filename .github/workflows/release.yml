@@ -1,0 +1,48 @@
+name: Release
+
+on:
+  push:
+    tags: ['[0-9]+.[0-9]+.[0-9]+']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Add MSBuild to PATH
+        uses: microsoft/setup-msbuild@v2
+
+      # The tag is the source of truth for the version. Stamp it into the csproj
+      # and menu string before packaging so the artifact (and the gta5mod.json /
+      # menu title that derive from <Version>) always match the tag — no
+      # pre-release bump commit. Touches only the runner's checkout, not the repo.
+      - name: Set version from tag
+        shell: pwsh
+        run: ./scripts/set-version.ps1 "${{ github.ref_name }}"
+
+      - name: Fetch reference assemblies
+        shell: pwsh
+        run: ./scripts/fetch-deps.ps1
+
+      # `make package` builds first, so no separate build step is needed.
+      - name: Lint
+        shell: bash
+        run: make lint MSBUILD=MSBuild.exe
+
+      - name: Test
+        shell: bash
+        run: make test
+
+      - name: Package
+        shell: bash
+        run: make package MSBUILD=MSBuild.exe
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/BetterTrafficLaws.zip
+          generate_release_notes: true

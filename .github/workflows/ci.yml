@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_call:
+
+jobs:
+  build:
+    # SHVDN script mod: .NET Framework 4.8 + MSBuild are Windows-only, matching
+    # the dev environment and the .zip packaging path.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Add MSBuild to PATH
+        uses: microsoft/setup-msbuild@v2
+
+      # The build links against SHVDN/LemonUI from ..\packages\ — the player's
+      # runtime assemblies, not in the repo. Pull pinned copies before building.
+      - name: Fetch reference assemblies
+        shell: pwsh
+        run: ./scripts/fetch-deps.ps1
+
+      # Everything goes through the Makefile so it stays the single source of
+      # truth. setup-msbuild puts MSBuild on PATH, so pass it explicitly.
+      - name: Lint (clean rebuild, warnings as the static check)
+        shell: bash
+        run: make lint MSBUILD=MSBuild.exe
+
+      - name: Test (prints manual steps; the game is the integration test)
+        shell: bash
+        run: make test
+
+      - name: Build
+        shell: bash
+        run: make build MSBUILD=MSBuild.exe
