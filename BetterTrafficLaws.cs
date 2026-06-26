@@ -171,7 +171,7 @@ namespace BetterTrafficLaws {
 			SetConfigValueIfNotDefined("Configuration", "SpeedLimitHighway", 120f);
 			SetConfigValueIfNotDefined("Configuration", "SpeedFactor", 1f);
 			SetConfigValueIfNotDefined("Configuration", "SpeedUnits", "KPH");
-			SetConfigValueIfNotDefined("Configuration", "MenuKey", Keys.B.ToString());
+			SetConfigValueIfNotDefined("Configuration", "MenuKey", Keys.Shift | Keys.B);
 
 			Enabled.Checked = Config.GetValue("Configuration", "Enabled", true) == true;
 			RedLightPenaltyEnabled = Config.GetValue("Configuration", "RedLightPenaltyEnabled", true) == true;
@@ -192,7 +192,7 @@ namespace BetterTrafficLaws {
 			SpeedLimitHighway.SelectedIndex = SpeedLimitHighway.Items.FindIndex(x => x == Config.GetValue("Configuration", "SpeedLimitHighway", 120f));
 			SpeedFactor.SelectedIndex = SpeedFactor.Items.FindIndex(x => x == Config.GetValue("Configuration", "SpeedFactor", 1f));
 			SpeedUnits.SelectedIndex = SpeedUnits.Items.FindIndex(x => x == Config.GetValue("Configuration", "SpeedUnits", "KPH"));
-			OpenMenu = Config.GetValue("Configuration", "MenuKey", Keys.B);
+			OpenMenu = Config.GetValue("Configuration", "MenuKey", Keys.Shift | Keys.B);
 
 			Tick += OnTick;
 			KeyUp += OnKeyUp;
@@ -402,7 +402,9 @@ namespace BetterTrafficLaws {
 		}
 
 		void OnKeyUp(object sender, KeyEventArgs e) {
-			if (e.KeyCode == OpenMenu) {
+			// Compare KeyData (key + active modifier flags) so a combo like Shift+B matches
+			// as configured; for a plain key it equals the key alone.
+			if (e.KeyData == OpenMenu) {
 				MainMenu.Visible = !MainMenu.Visible;
 			}
 		}
