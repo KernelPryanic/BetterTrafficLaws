@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Reflection;
 using System.Windows.Forms;
 using GTA;
 using GTA.Math;
@@ -450,8 +451,16 @@ namespace BetterTrafficLaws {
 			Config.Save();
 		}
 
+		// The menu subtitle's version comes from the assembly (Properties\AssemblyInfo.cs),
+		// which the release workflow stamps from the git tag — so a release only needs the
+		// tag, with no hardcoded string to keep in sync. ToString(3) trims the 4-part .NET
+		// version (e.g. 3.0.4.0) to semver (3.0.4).
+		static string MenuVersion() {
+			return "Version " + Assembly.GetExecutingAssembly().GetName().Version.ToString(3);
+		}
+
 		void MainMenuInit() {
-			MainMenu = new NativeMenu("Better Traffic Laws", "Version 3.0.4");
+			MainMenu = new NativeMenu("Better Traffic Laws", MenuVersion());
 
 			Enabled = new NativeCheckboxItem("Enabled");
 			MainMenu.Add(Enabled);
