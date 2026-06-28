@@ -118,6 +118,7 @@ namespace BetterTrafficLaws {
 
 		NativeMenu MainMenu;
 		NativeCheckboxItem Enabled;
+		NativeCheckboxItem EmergencyVehicleExempt;
 		NativeListItem<float> CopsDistance;
 		NativeListItem<string> SpeedUnits;
 		NativeListItem<float> SpeedLimit;
@@ -169,6 +170,7 @@ namespace BetterTrafficLaws {
 
 			// Define default values
 			SetConfigValueIfNotDefined("Configuration", "Enabled", "True");
+			SetConfigValueIfNotDefined("Configuration", "EmergencyVehicleExempt", "True");
 			SetConfigValueIfNotDefined("Configuration", "RedLightPenaltyEnabled", "True");
 			SetConfigValueIfNotDefined("Configuration", "OverspeedingPenaltyEnabled", "True");
 			SetConfigValueIfNotDefined("Configuration", "OverspeedingOnHighwayPenaltyEnabled", "True");
@@ -190,6 +192,7 @@ namespace BetterTrafficLaws {
 			SetConfigValueIfNotDefined("Configuration", "LogLevel", nameof(LogLevel.Info));
 
 			Enabled.Checked = Config.GetValue("Configuration", "Enabled", true) == true;
+			EmergencyVehicleExempt.Checked = Config.GetValue("Configuration", "EmergencyVehicleExempt", true) == true;
 			RedLightPenaltyEnabled = Config.GetValue("Configuration", "RedLightPenaltyEnabled", true) == true;
 			OverspeedingPenaltyEnabled = Config.GetValue("Configuration", "OverspeedingPenaltyEnabled", true) == true;
 			OverspeedingOnHighwayPenaltyEnabled = Config.GetValue("Configuration", "OverspeedingOnHighwayPenaltyEnabled", true) == true;
@@ -215,7 +218,7 @@ namespace BetterTrafficLaws {
 			Logger.Threshold = logLevel;
 
 			// One triage line with the resolved config, written even at Error level.
-			Logger.LogBanner($"Config: enabled={Enabled.Checked} units={SpeedUnits.SelectedItem} limit={SpeedLimit.SelectedItem} highway={SpeedLimitHighway.SelectedItem} factor={SpeedFactor.SelectedItem} stars={StarsToAdd.SelectedItem} menuKey={OpenMenu} logLevel={Logger.Threshold}.");
+			Logger.LogBanner($"Config: enabled={Enabled.Checked} emergencyExempt={EmergencyVehicleExempt.Checked} units={SpeedUnits.SelectedItem} limit={SpeedLimit.SelectedItem} highway={SpeedLimitHighway.SelectedItem} factor={SpeedFactor.SelectedItem} stars={StarsToAdd.SelectedItem} menuKey={OpenMenu} logLevel={Logger.Threshold}.");
 
 			Tick += OnTick;
 			KeyUp += OnKeyUp;
@@ -265,6 +268,9 @@ namespace BetterTrafficLaws {
 				if (!currentVehicle.GetPedOnSeat(VehicleSeat.Driver).Equals(Game.Player.Character)) { Bail("not the driver"); return; }
 				if (currentVehicle.Model.IsBicycle || currentVehicle.Model.IsBoat || currentVehicle.Model.IsHelicopter ||
 						currentVehicle.Model.IsPlane || currentVehicle.Model.IsTrain) { Bail("vehicle class exempt"); return; }
+				// On duty in an emergency vehicle (police/ambulance/fire) with the siren
+				// running, traffic violations are expected — suppress all detection.
+				if (EmergencyVehicleExempt.Checked && currentVehicle.ClassType == VehicleClass.Emergency && currentVehicle.IsSirenActive) { Bail("emergency vehicle on duty"); return; }
 				ConvertedSpeed = SpeedUnits.SelectedItem == "KPH" ? ToKPH(currentVehicle.Speed) : ToMPH(currentVehicle.Speed);
 			} catch (Exception e) {
 				// e.ToString() — not e.StackTrace, which is null for a freshly
@@ -481,6 +487,9 @@ namespace BetterTrafficLaws {
 			if (sender == Enabled) {
 				Config.SetValue("Configuration", "Enabled", Enabled.Checked);
 			}
+			if (sender == EmergencyVehicleExempt) {
+				Config.SetValue("Configuration", "EmergencyVehicleExempt", EmergencyVehicleExempt.Checked);
+			}
 
 			Config.Save();
 		}
@@ -541,6 +550,11 @@ namespace BetterTrafficLaws {
 			Enabled = new NativeCheckboxItem("Enabled");
 			MainMenu.Add(Enabled);
 
+			EmergencyVehicleExempt = new NativeCheckboxItem("Emergency Vehicle Exempt") {
+				Description = "Suppress detection while driving a police/ambulance/fire vehicle with the siren on."
+			};
+			MainMenu.Add(EmergencyVehicleExempt);
+
 			CopsDistance = new NativeListItem<float>(
 				"Cops Visibility Distance",
 				20f, 25f, 30f, 35f, 40f, 45f, 50f, 55f, 60f, 65f, 70f, 75f, 80f, 85f, 90f, 95f, 100f, 105f, 110f, 115f, 120f
@@ -579,6 +593,7 @@ namespace BetterTrafficLaws {
 			MainMenu.Add(LogLevelItem);
 
 			Enabled.CheckboxChanged += OnCheckboxChange;
+			EmergencyVehicleExempt.CheckboxChanged += OnCheckboxChange;
 			CopsDistance.ItemChanged += OnListChange;
 			StarsToAdd.ItemChanged += OnListChange;
 			SpeedLimit.ItemChanged += OnListChange;
