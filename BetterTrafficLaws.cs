@@ -326,9 +326,11 @@ namespace BetterTrafficLaws {
 					if (dotProduct < Math.Cos(DegreesToAngle(60f))) continue;
 					facing++;
 
-					// ...and has line of sight to the player or their vehicle.
-					RaycastResult raycast = World.Raycast(p.Position, Game.Player.Character.Position, IntersectFlags.Everything);
-					if (raycast.HitEntity != null && (raycast.HitEntity.Handle == currentVehicle.Handle || raycast.HitEntity.Handle == Game.Player.Character.Handle)) {
+					// ...and has line of sight to the player or their vehicle. The native LOS
+					// check (vs a manual feet-to-feet raycast) ignores the cop's own body and
+					// car — a cop sitting in a cruiser previously failed because the ray hit
+					// its own vehicle first — while still respecting real obstacles between them.
+					if (p.HasClearLineOfSightTo(Game.Player.Character) || p.HasClearLineOfSightTo(currentVehicle)) {
 						// SetWantedLevel queues the change; ApplyWantedLevelChangeNow
 						// makes it take effect this frame instead of after the game's
 						// internal delay. false = singleplayer.
