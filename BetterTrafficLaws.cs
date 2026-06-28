@@ -72,11 +72,18 @@ namespace BetterTrafficLaws {
 		public static string For(string fileName) => Path.Combine(DataDirectory, fileName);
 	}
 
+	// Ordered by severity: a line writes only when its level is at least the threshold.
+	public enum LogLevel { Debug, Info, Error }
+
 	public static class Logger {
 		// Resolved on each use, not cached: ScriptPaths.Directory is finalized only
 		// after the Script constructor calls ScriptPaths.Init, which runs after this
 		// type is first touched. Caching here would freeze the pre-Init fallback path.
 		static string LogFilePath => ScriptPaths.For("BetterTrafficLaws.log");
+
+		// Lowest level that gets written. Info by default; the ini's [Configuration]
+		// LogLevel can drop it to Debug to include the verbose per-violation diagnostics.
+		public static LogLevel Threshold { get; set; } = LogLevel.Info;
 
 		public static void ClearLog() {
 			try {
@@ -86,17 +93,18 @@ namespace BetterTrafficLaws {
 			}
 		}
 
-		public static void Log(object message) {
-			Write("INFO", message);
-		}
+		public static void LogDebug(object message) => Write(LogLevel.Debug, message);
+		public static void Log(object message) => Write(LogLevel.Info, message);
+		public static void LogError(object message) => Write(LogLevel.Error, message);
 
-		public static void LogError(object message) {
-			Write("ERROR", message);
-		}
+		// Always written, ignoring Threshold — for once-per-session triage lines (version,
+		// resolved config) that must appear even when the user runs at Error level.
+		public static void LogBanner(object message) => Write(LogLevel.Error, message, force: true);
 
-		static void Write(string level, object message) {
+		static void Write(LogLevel level, object message, bool force = false) {
+			if (!force && level < Threshold) return;
 			try {
-				File.AppendAllText(LogFilePath, DateTime.Now + " [" + level + "] " + message + Environment.NewLine);
+				File.AppendAllText(LogFilePath, DateTime.Now + " [" + level.ToString().ToUpperInvariant() + "] " + message + Environment.NewLine);
 			} catch {
 				// Logging must never crash the script.
 			}
@@ -116,6 +124,7 @@ namespace BetterTrafficLaws {
 		NativeListItem<float> SpeedLimitHighway;
 		NativeListItem<float> SpeedFactor;
 		NativeListItem<int> StarsToAdd;
+		NativeListItem<LogLevel> LogLevelItem;
 
 		float ConvertedSpeed;
 		float SpeedBeforeHit;
@@ -141,13 +150,18 @@ namespace BetterTrafficLaws {
 
 		int Period;
 
+		// Last early-return reason logged, to edge-trigger the Debug trace: a stable
+		// state (parked, on foot) logs once instead of flooding the log every tick.
+		string LastBailReason;
+
 		public BetterTrafficLaws() {
 			// Records the DLL folder for diagnostics; runtime writes go to %APPDATA%,
 			// independent of this. Must run before any logging or config IO.
 			ScriptPaths.Init(BaseDirectory);
 
 			Logger.ClearLog();
-			Logger.Log("BetterTrafficLaws started. Files dir: " + ScriptPaths.DataDirectory);
+			// Banner so the build + data dir land in the log even at Error level (triage).
+			Logger.LogBanner("BetterTrafficLaws " + MenuVersion() + " started. Files dir: " + ScriptPaths.DataDirectory);
 			MainMenuInit();
 
 			ConfigPath = ScriptPaths.For("BetterTrafficLaws.ini");
@@ -173,6 +187,7 @@ namespace BetterTrafficLaws {
 			SetConfigValueIfNotDefined("Configuration", "SpeedFactor", 1f);
 			SetConfigValueIfNotDefined("Configuration", "SpeedUnits", "KPH");
 			SetConfigValueIfNotDefined("Configuration", "MenuKey", Keys.Shift | Keys.B);
+			SetConfigValueIfNotDefined("Configuration", "LogLevel", nameof(LogLevel.Info));
 
 			Enabled.Checked = Config.GetValue("Configuration", "Enabled", true) == true;
 			RedLightPenaltyEnabled = Config.GetValue("Configuration", "RedLightPenaltyEnabled", true) == true;
@@ -195,9 +210,19 @@ namespace BetterTrafficLaws {
 			SpeedUnits.SelectedIndex = SpeedUnits.Items.FindIndex(x => x == Config.GetValue("Configuration", "SpeedUnits", "KPH"));
 			OpenMenu = Config.GetValue("Configuration", "MenuKey", Keys.Shift | Keys.B);
 
+			LogLevel logLevel = ParseLogLevel(Config.GetValue("Configuration", "LogLevel", nameof(LogLevel.Info)));
+			LogLevelItem.SelectedIndex = LogLevelItem.Items.FindIndex(x => x == logLevel);
+			Logger.Threshold = logLevel;
+
+			// One triage line with the resolved config, written even at Error level.
+			Logger.LogBanner($"Config: enabled={Enabled.Checked} units={SpeedUnits.SelectedItem} limit={SpeedLimit.SelectedItem} highway={SpeedLimitHighway.SelectedItem} factor={SpeedFactor.SelectedItem} stars={StarsToAdd.SelectedItem} menuKey={OpenMenu} logLevel={Logger.Threshold}.");
+
 			Tick += OnTick;
 			KeyUp += OnKeyUp;
 		}
+
+		static LogLevel ParseLogLevel(string value) =>
+			Enum.TryParse(value, true, out LogLevel level) ? level : LogLevel.Info;
 
 		private void SetConfigValueIfNotDefined<T>(string section, string key, T defaultValue) {
 			// Detect key *presence*, not value: comparing against default(T) wrongly
@@ -229,11 +254,17 @@ namespace BetterTrafficLaws {
 
 			Vehicle currentVehicle;
 			try {
-				if (!Enabled.Checked || Game.Player == null || Game.Player.Wanted.WantedLevel >= StarsToAdd.SelectedItem || !Game.Player.Character.IsInVehicle()) return;
+				// Each early return names its reason (Debug, edge-triggered) so a silent
+				// "nothing happens" report can be split into "we bailed because X" vs a
+				// real detection miss.
+				if (!Enabled.Checked) { Bail("disabled"); return; }
+				if (Game.Player == null) { Bail("no player"); return; }
+				if (Game.Player.Wanted.WantedLevel >= StarsToAdd.SelectedItem) { Bail("already wanted"); return; }
+				if (!Game.Player.Character.IsInVehicle()) { Bail("on foot"); return; }
 				currentVehicle = Game.Player.Character.CurrentVehicle;
-				if (!currentVehicle.GetPedOnSeat(VehicleSeat.Driver).Equals(Game.Player.Character) ||
-						currentVehicle.Model.IsBicycle || currentVehicle.Model.IsBoat || currentVehicle.Model.IsHelicopter ||
-							currentVehicle.Model.IsPlane || currentVehicle.Model.IsTrain) return;
+				if (!currentVehicle.GetPedOnSeat(VehicleSeat.Driver).Equals(Game.Player.Character)) { Bail("not the driver"); return; }
+				if (currentVehicle.Model.IsBicycle || currentVehicle.Model.IsBoat || currentVehicle.Model.IsHelicopter ||
+						currentVehicle.Model.IsPlane || currentVehicle.Model.IsTrain) { Bail("vehicle class exempt"); return; }
 				ConvertedSpeed = SpeedUnits.SelectedItem == "KPH" ? ToKPH(currentVehicle.Speed) : ToMPH(currentVehicle.Speed);
 			} catch (Exception e) {
 				// e.ToString() — not e.StackTrace, which is null for a freshly
@@ -242,11 +273,25 @@ namespace BetterTrafficLaws {
 				return;
 			}
 
-			if (!IsRunningOnRedLight(currentVehicle) && !IsDrivingAgainstTraffic() && !IsDrivingOnPavement() &&
-				!HitPed() && !HitVehicle() &&
-				!IsUsingMobilePhone() && !IsDrivingWithoutHelmet(currentVehicle) &&
-				!IsWheeling(currentVehicle) && !IsBurningOut(currentVehicle) && !IsOverspeeding())
-				return;
+			// Active so the gates above only log their reason on a fresh transition.
+			LastBailReason = null;
+
+			// Collect every violation that fired this scan, both so the cop check runs
+			// once and so Debug can name exactly what was detected.
+			List<string> violations = new List<string>();
+			if (IsRunningOnRedLight(currentVehicle)) violations.Add("red light");
+			if (IsDrivingAgainstTraffic()) violations.Add("against traffic");
+			if (IsDrivingOnPavement()) violations.Add("on pavement");
+			if (HitPed()) violations.Add("hit ped");
+			if (HitVehicle()) violations.Add("hit vehicle");
+			if (IsUsingMobilePhone()) violations.Add("mobile phone");
+			if (IsDrivingWithoutHelmet(currentVehicle)) violations.Add("no helmet");
+			if (IsWheeling(currentVehicle)) violations.Add("wheelie");
+			if (IsBurningOut(currentVehicle)) violations.Add("burnout");
+			if (IsOverspeeding()) violations.Add("overspeed");
+			if (violations.Count == 0) return;
+
+			Logger.LogDebug($"Violation(s) detected: {string.Join(", ", violations)} at {ConvertedSpeed:F0} {SpeedUnits.SelectedItem}. Scanning for cops within {CopsDistance.SelectedItem}.");
 
 			List<PedHash> allowedCops = new List<PedHash> {
 				PedHash.Cop01SFY,
@@ -261,14 +306,19 @@ namespace BetterTrafficLaws {
 				allowedCops.Add(PedHash.Hwaycop01SMY);
 			}
 			Ped[] nearbyPeds = World.GetNearbyPeds(Game.Player.Character.Position, CopsDistance.SelectedItem);
+			// Tally why the scan did/didn't ticket, so Debug can explain a "violation
+			// detected but no wanted level" report: were there cops? facing? in sight?
+			int cops = 0, facing = 0;
 			foreach (Ped p in nearbyPeds) {
 				try {
 					if (!allowedCops.Contains((PedHash)p.Model.Hash) || p.IsDead) continue;
+					cops++;
 
 					// Only count a cop who is facing the player (within a 60° cone)...
 					Vector3 directionToPlayer = (Game.Player.Character.Position - p.Position).Normalized;
 					float dotProduct = Vector3.Dot(directionToPlayer, p.ForwardVector);
 					if (dotProduct < Math.Cos(DegreesToAngle(60f))) continue;
+					facing++;
 
 					// ...and has line of sight to the player or their vehicle.
 					RaycastResult raycast = World.Raycast(p.Position, Game.Player.Character.Position, IntersectFlags.Everything);
@@ -278,14 +328,28 @@ namespace BetterTrafficLaws {
 						// internal delay. false = singleplayer.
 						Game.Player.Wanted.SetWantedLevel(StarsToAdd.SelectedItem, false);
 						Game.Player.Wanted.ApplyWantedLevelChangeNow(false);
-						break; // A visible cop is enough; stop scanning.
+						Logger.LogDebug($"Ticketed by {(PedHash)p.Model.Hash} -> wanted {StarsToAdd.SelectedItem}.");
+						return; // A visible cop is enough; stop scanning.
 					}
-				} catch {
+				} catch (Exception e) {
 					// A ped can despawn mid-scan, invalidating its handle; skip it
 					// rather than letting one stale entity throw out of OnTick.
+					Logger.LogDebug("Skipped a ped during cop scan: " + e.Message);
 					continue;
 				}
 			}
+			// Reached only when no cop ticketed despite a violation — the usual "why
+			// didn't I get a wanted level" case, now explained by the tally.
+			Logger.LogDebug($"No ticket: {cops} cop(s) in range, {facing} facing, none with line of sight.");
+		}
+
+		// Edge-triggered Debug trace of an early return: logs only when the reason
+		// changes, so a sustained state (parked, on foot) writes one line, not one
+		// per tick. Costs nothing above the field compare at Info level.
+		void Bail(string reason) {
+			if (LastBailReason == reason) return;
+			LastBailReason = reason;
+			Logger.LogDebug("Idle: " + reason + ".");
 		}
 
 		bool IsRunningOnRedLight(Vehicle vehicle) {
@@ -308,7 +372,10 @@ namespace BetterTrafficLaws {
 				}
 
 				return (votes > 0.5 * inBackOnTrafficLight.Count) && (ConvertedSpeed > 5);
-			} catch {
+			} catch (Exception e) {
+				// A neighbouring vehicle can despawn mid-evaluation; treat as no
+				// violation but leave a Debug breadcrumb rather than swallowing blind.
+				Logger.LogDebug("Red-light check skipped: " + e.Message);
 				return false;
 			}
 		}
@@ -451,6 +518,15 @@ namespace BetterTrafficLaws {
 			Config.Save();
 		}
 
+		void OnListChange(object sender, ItemChangedEventArgs<LogLevel> e) {
+			if (sender == LogLevelItem) {
+				Logger.Threshold = LogLevelItem.Items[e.Index];
+				Config.SetValue("Configuration", "LogLevel", LogLevelItem.Items[e.Index].ToString());
+			}
+
+			Config.Save();
+		}
+
 		// The menu subtitle's version comes from the assembly (Properties\AssemblyInfo.cs),
 		// which the release workflow stamps from the git tag — so a release only needs the
 		// tag, with no hardcoded string to keep in sync. ToString(3) trims the 4-part .NET
@@ -495,6 +571,13 @@ namespace BetterTrafficLaws {
 			SpeedUnits = new NativeListItem<string>("Speed Units", "", "KPH", "MPH");
 			MainMenu.Add(SpeedUnits);
 
+			// Info is the normal level; Debug adds per-violation diagnostics for bug
+			// reports; Error quiets everything but failures (banners still write).
+			LogLevelItem = new NativeListItem<LogLevel>("Log Level", LogLevel.Info, LogLevel.Debug, LogLevel.Error) {
+				Description = "Verbosity of BetterTrafficLaws.log. Debug logs each violation."
+			};
+			MainMenu.Add(LogLevelItem);
+
 			Enabled.CheckboxChanged += OnCheckboxChange;
 			CopsDistance.ItemChanged += OnListChange;
 			StarsToAdd.ItemChanged += OnListChange;
@@ -502,6 +585,7 @@ namespace BetterTrafficLaws {
 			SpeedLimitHighway.ItemChanged += OnListChange;
 			SpeedFactor.ItemChanged += OnListChange;
 			SpeedUnits.ItemChanged += OnListChange;
+			LogLevelItem.ItemChanged += OnListChange;
 		}
 	}
 }
