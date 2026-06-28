@@ -6,3 +6,5 @@ dist/
 # Keep shared build tasks; ignore the per-user VS Code files.
 .vscode/*
 !.vscode/tasks.json
+
+DESCRIPTION.html

@@ -136,6 +136,16 @@ namespace BetterTrafficLaws {
 		int LastTimeBurnout;
 		int LastTimeOverspeed;
 		int LastTimeOverspeedHighway;
+		// A red crossing awaiting its verdict, taken as two heading snapshots. At the crossing the
+		// heading and game time are captured; RightTurnGraceMs later a second heading is read and
+		// compared. Turned right enough between the two → it was a legal right-on-red, else a ticket.
+		// Only the endpoints are sampled, so nothing in between (a momentary flick, a brief stop, a
+		// nudge of reverse) can wipe the case. -1 = no pending case.
+		int PendingRedCrossTime = -1;
+		float PendingRedCrossHeading;
+		// Whether a cop witnessed the crossing at the moment it happened. The fine reflects who saw
+		// the run at the line, not who happens to be nearby seconds later when the verdict resolves.
+		bool PendingRedCrossWitnessed;
 
 		readonly bool RedLightPenaltyEnabled;
 		readonly bool OverspeedingPenaltyEnabled;
@@ -282,10 +292,14 @@ namespace BetterTrafficLaws {
 			// Active so the gates above only log their reason on a fresh transition.
 			LastBailReason = null;
 
-			// Collect every violation that fired this scan, both so the cop check runs
-			// once and so Debug can name exactly what was detected.
+			// Red light tickets on its own deferred schedule (see ResolveRedLightCrossing); the
+			// witness was already captured at the crossing, so apply straight away.
+			if (ResolveRedLightCrossing(currentVehicle)) {
+				ApplyWantedLevel();
+				return;
+			}
+
 			List<string> violations = new List<string>();
-			if (IsRunningOnRedLight(currentVehicle)) violations.Add("red light");
 			if (IsDrivingAgainstTraffic()) violations.Add("against traffic");
 			if (IsDrivingOnPavement()) violations.Add("on pavement");
 			if (HitPed()) violations.Add("hit ped");
@@ -298,7 +312,12 @@ namespace BetterTrafficLaws {
 			if (violations.Count == 0) return;
 
 			Logger.LogDebug($"Violation(s) detected: {string.Join(", ", violations)} at {ConvertedSpeed:F0} {SpeedUnits.SelectedItem}. Scanning for cops within {CopsDistance.SelectedItem}.");
+			if (WitnessingCop(currentVehicle) != null) ApplyWantedLevel();
+		}
 
+		// The nearest allowed cop facing the player (60° cone) with line of sight, or null if none.
+		// Highway cops only count while the highway-overspeed predicate holds.
+		Ped WitnessingCop(Vehicle vehicle) {
 			List<PedHash> allowedCops = new List<PedHash> {
 				PedHash.Cop01SFY,
 				PedHash.Cop01SMY,
@@ -312,43 +331,37 @@ namespace BetterTrafficLaws {
 				allowedCops.Add(PedHash.Hwaycop01SMY);
 			}
 			Ped[] nearbyPeds = World.GetNearbyPeds(Game.Player.Character.Position, CopsDistance.SelectedItem);
-			// Tally why the scan did/didn't ticket, so Debug can explain a "violation
-			// detected but no wanted level" report: were there cops? facing? in sight?
 			int cops = 0, facing = 0;
 			foreach (Ped p in nearbyPeds) {
 				try {
 					if (!allowedCops.Contains((PedHash)p.Model.Hash) || p.IsDead) continue;
 					cops++;
 
-					// Only count a cop who is facing the player (within a 60° cone)...
 					Vector3 directionToPlayer = (Game.Player.Character.Position - p.Position).Normalized;
-					float dotProduct = Vector3.Dot(directionToPlayer, p.ForwardVector);
-					if (dotProduct < Math.Cos(DegreesToAngle(60f))) continue;
+					if (Vector3.Dot(directionToPlayer, p.ForwardVector) < Math.Cos(DegreesToAngle(60f))) continue;
 					facing++;
 
-					// ...and has line of sight to the player or their vehicle. The native LOS
-					// check (vs a manual feet-to-feet raycast) ignores the cop's own body and
-					// car — a cop sitting in a cruiser previously failed because the ray hit
-					// its own vehicle first — while still respecting real obstacles between them.
-					if (p.HasClearLineOfSightTo(Game.Player.Character) || p.HasClearLineOfSightTo(currentVehicle)) {
-						// SetWantedLevel queues the change; ApplyWantedLevelChangeNow
-						// makes it take effect this frame instead of after the game's
-						// internal delay. false = singleplayer.
-						Game.Player.Wanted.SetWantedLevel(StarsToAdd.SelectedItem, false);
-						Game.Player.Wanted.ApplyWantedLevelChangeNow(false);
-						Logger.LogDebug($"Ticketed by {(PedHash)p.Model.Hash} -> wanted {StarsToAdd.SelectedItem}.");
-						return; // A visible cop is enough; stop scanning.
+					// Native LOS (vs a feet-to-feet raycast) ignores the cop's own body and car — a cop
+					// in a cruiser used to fail because the ray hit its own vehicle first.
+					if (p.HasClearLineOfSightTo(Game.Player.Character) || p.HasClearLineOfSightTo(vehicle)) {
+						return p;
 					}
 				} catch (Exception e) {
-					// A ped can despawn mid-scan, invalidating its handle; skip it
-					// rather than letting one stale entity throw out of OnTick.
+					// A ped can despawn mid-scan; skip it rather than throwing out of OnTick.
 					Logger.LogDebug("Skipped a ped during cop scan: " + e.Message);
 					continue;
 				}
 			}
-			// Reached only when no cop ticketed despite a violation — the usual "why
-			// didn't I get a wanted level" case, now explained by the tally.
 			Logger.LogDebug($"No ticket: {cops} cop(s) in range, {facing} facing, none with line of sight.");
+			return null;
+		}
+
+		// ApplyWantedLevelChangeNow makes the change take effect this frame, not after the game's
+		// internal delay. false = singleplayer.
+		void ApplyWantedLevel() {
+			Game.Player.Wanted.SetWantedLevel(StarsToAdd.SelectedItem, false);
+			Game.Player.Wanted.ApplyWantedLevelChangeNow(false);
+			Logger.LogDebug($"Ticketed -> wanted {StarsToAdd.SelectedItem}.");
 		}
 
 		// Edge-triggered Debug trace of an early return: logs only when the reason
@@ -360,29 +373,51 @@ namespace BetterTrafficLaws {
 			Logger.LogDebug("Idle: " + reason + ".");
 		}
 
-		bool IsRunningOnRedLight(Vehicle vehicle) {
+		const float RightTurnHeadingDelta = 35f; // min rightward turn (deg) that excuses a red crossing
+		const int RightTurnGraceMs = 4000;       // wait this long after crossing before judging the turn
+		const float QueueClearBuffer = 3.5f;     // metres past the front stopped car that count as crossed
+
+		// A red crossing is judged from two heading snapshots: one at the line, one RightTurnGraceMs
+		// later. Sampling only the endpoints — never in between — is what makes it un-gameable: a flick,
+		// a brief stop, or a nudge of reverse leaves no trace, only the net turn does. The witnessing
+		// cop is captured at the crossing, so the fine reflects who saw the run, not who is near at the
+		// verdict. Returns true on the one frame a ticket should land.
+		bool ResolveRedLightCrossing(Vehicle vehicle) {
 			if (!RedLightPenaltyEnabled) return false;
 			try {
-				List<Vehicle> nearbyVehicles = new List<Vehicle>(World.GetNearbyVehicles(Game.Player.Character.Position, 20f))
-					.FindAll(v => v.Driver.Exists() && v.Driver != Game.Player.Character && v.Speed == 0)
-					.FindAll(v => Vector3.Dot(Heading(vehicle), Heading(v)) >= Math.Cos(DegreesToAngle(30f)));
-				List<Vehicle> inFrontOnTrafficLight = nearbyVehicles
-					.FindAll(v => Vector3.Dot(Heading(vehicle), (vehicle.Position - v.Position).Normalized) <
-						Math.Cos(DegreesToAngle(Math.Min(45f * vehicle.Position.DistanceTo(v.Position) / 7f, 75f))));
-				List<Vehicle> inBackOnTrafficLight = nearbyVehicles
-					.FindAll(v => Vector3.Dot(Heading(vehicle), (vehicle.Position - v.Position).Normalized) > Math.Cos(DegreesToAngle(90f)));
-
-				if (inFrontOnTrafficLight.Count > 0) return false;
-
-				int votes = 0;
-				foreach (Vehicle v in inBackOnTrafficLight) {
-					if (v.IsStoppedAtTrafficLights) votes++;
+				if (PendingRedCrossTime >= 0) {
+					if (Game.GameTime - PendingRedCrossTime < RightTurnGraceMs) return false;
+					PendingRedCrossTime = -1;
+					// Right rotation reads negative; a real turn ends well past the threshold.
+					float turned = ((vehicle.Heading - PendingRedCrossHeading + 540f) % 360f) - 180f;
+					bool ticket = turned > -RightTurnHeadingDelta && PendingRedCrossWitnessed;
+					Logger.LogDebug($"Red-light verdict: turned={turned:F0} witnessed={PendingRedCrossWitnessed} -> {(ticket ? "TICKET" : (turned <= -RightTurnHeadingDelta ? "legal right turn" : "ran but unwitnessed"))}.");
+					return ticket;
 				}
 
-				return (votes > 0.5 * inBackOnTrafficLight.Count) && (ConvertedSpeed > 5);
+				// Match co-directional stopped cars by ForwardVector, not Heading(): Heading blends
+				// Velocity, which normalizes to garbage at rest and drops the stopped witnesses we need.
+				Vector3 myForward = vehicle.ForwardVector;
+				List<Vehicle> stopped = new List<Vehicle>(World.GetNearbyVehicles(vehicle.Position, 20f))
+					.FindAll(v => v.Driver != null && v.Driver.Exists() && v.Driver != Game.Player.Character && v.Speed == 0)
+					.FindAll(v => Vector3.Dot(myForward, v.ForwardVector) >= Math.Cos(DegreesToAngle(30f)));
+
+				float frontFwd = float.NegativeInfinity;
+				foreach (Vehicle v in stopped) {
+					frontFwd = Math.Max(frontFwd, Vector3.Dot(myForward, v.Position - vehicle.Position));
+				}
+				int atLights = stopped.FindAll(v => v.IsStoppedAtTrafficLights).Count;
+
+				// First frame past the line with cars held at the red and moving: latch the crossing.
+				if (frontFwd <= -QueueClearBuffer && atLights > 0 && ConvertedSpeed > 5) {
+					PendingRedCrossTime = Game.GameTime;
+					PendingRedCrossHeading = vehicle.Heading;
+					PendingRedCrossWitnessed = WitnessingCop(vehicle) != null;
+					Logger.LogDebug($"Red-light crossing latched; witnessed={PendingRedCrossWitnessed}.");
+				}
+				return false;
 			} catch (Exception e) {
-				// A neighbouring vehicle can despawn mid-evaluation; treat as no
-				// violation but leave a Debug breadcrumb rather than swallowing blind.
+				// A neighbouring vehicle can despawn mid-evaluation; log and treat as no violation.
 				Logger.LogDebug("Red-light check skipped: " + e.Message);
 				return false;
 			}
@@ -459,10 +494,6 @@ namespace BetterTrafficLaws {
 			if (!Function.Call<bool>(Hash.IS_VEHICLE_IN_BURNOUT, vehicle))
 				LastTimeBurnout = Game.GameTime;
 			return Game.GameTime - LastTimeBurnout > 3000;
-		}
-
-		Vector3 Heading(Entity entity) {
-			return (0.5f * entity.ForwardVector.Normalized + 0.5f * entity.Velocity.Normalized).Normalized;
 		}
 
 		double DegreesToAngle(float degrees) {
