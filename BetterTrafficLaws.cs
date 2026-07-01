@@ -279,9 +279,10 @@ namespace BetterTrafficLaws {
 				if (!currentVehicle.GetPedOnSeat(VehicleSeat.Driver).Equals(Game.Player.Character)) { Bail("not the driver"); return; }
 				if (currentVehicle.Model.IsBicycle || currentVehicle.Model.IsBoat || currentVehicle.Model.IsHelicopter ||
 						currentVehicle.Model.IsPlane || currentVehicle.Model.IsTrain) { Bail("vehicle class exempt"); return; }
-				// On duty in an emergency vehicle (police/ambulance/fire) with the siren
-				// running, traffic violations are expected — suppress all detection.
-				if (EmergencyVehicleExempt.Checked && currentVehicle.ClassType == VehicleClass.Emergency && currentVehicle.IsSirenActive) { Bail("emergency vehicle on duty"); return; }
+				// On duty with the siren running, violations are expected — suppress detection.
+				// HasSiren, not the Emergency class, is the capability test: it catches siren
+				// models in other classes (police bike, ranger) that the class check would miss.
+				if (EmergencyVehicleExempt.Checked && currentVehicle.HasSiren && currentVehicle.IsSirenActive) { Bail("emergency vehicle on duty"); return; }
 				ConvertedSpeed = SpeedUnits.SelectedItem == "KPH" ? ToKPH(currentVehicle.Speed) : ToMPH(currentVehicle.Speed);
 			} catch (Exception e) {
 				// e.ToString() — not e.StackTrace, which is null for a freshly
@@ -586,7 +587,7 @@ namespace BetterTrafficLaws {
 			MainMenu.Add(Enabled);
 
 			EmergencyVehicleExempt = new NativeCheckboxItem("Emergency Vehicle Exempt") {
-				Description = "Suppress detection while driving a police/ambulance/fire vehicle with the siren on."
+				Description = "Suppress detection while driving any siren-equipped vehicle with the siren on."
 			};
 			MainMenu.Add(EmergencyVehicleExempt);
 
