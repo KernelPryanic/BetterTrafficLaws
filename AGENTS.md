@@ -1,174 +1,123 @@
 # AGENTS.md — GTA V SHVDN script mods
 
-A collection of best practices for any GTA V script mod built on **ScriptHookV
-.NET (SHVDN3)**: a C# class that subclasses `GTA.Script`, runs inside the game via
-the SHVDN runtime, and reacts to the game loop. These conventions are generic —
-not tied to any one mod — and apply to every mod of this shape in this workspace.
+House style for any GTA V script mod built on **ScriptHookV .NET (SHVDN3)**: a C#
+class that subclasses `GTA.Script`, loaded by the SHVDN runtime, reacting to the
+game loop. Generic — applies to every mod of this shape in the workspace.
 
 ## Core principles
-- Best modern C# practices for the target framework (.NET Framework 4.8). Simple,
-  reusable, maintainable code; maintainability and simplicity come first, optimize
-  only where it pays off (the `OnTick` hot path is the one place that earns it).
-- Use proper abstraction only where truly required. Abstractions belong at the
-  seams (config load/save, the menu, persistence, one method per feature/action) —
-  not mid-code. Three similar lines beat a premature helper.
-- Write the minimal thing first. Don't generalize for hypothetical future
-  features; add the table/strategy when a second concrete case actually shows up.
-- Design for reversibility: each feature is a self-contained unit (one method, one
-  flag, one menu item). Ask "what would it take to delete this feature?" — it
-  should be removing those, nothing more.
-- Breaking changes are fine when they make the code better.
-- After changing code, revisit it: simpler? something now unused? remove it.
+- **Simplicity first.** Best modern C# for .NET Framework 4.8; maintainable over
+  clever. Optimize only where it pays — `OnTick` is the one hot path that earns it.
+- **Abstract at the seams only** (config, menu, persistence, one method per
+  feature) — never mid-code. Three similar lines beat a premature helper.
+- **Minimal thing first.** Don't generalize for hypothetical features; add the
+  table/strategy when a second concrete case actually appears.
+- **Reversible features.** Each is a self-contained unit (one method, one flag, one
+  menu item) — deleting it should mean removing exactly those, nothing more.
+- Breaking changes are fine when they make the code better. After changing code,
+  revisit: simpler now? something unused? delete it.
 
 ## Project shape
-- `*.cs` — the script source. The entry point is a `Script` subclass; its
-  constructor wires up `Tick`/`KeyUp`/`KeyDown` handlers and loads config. A small
-  mod is fine as one file, organized by region (menu init, config load, the tick
-  loop, the feature methods). As it grows, split by concern into separate
-  files/classes — one `Script` subclass per independent script, plus plain classes
-  for menu, config, persistence, and each feature group. The SHVDN runtime loads
-  every `Script` subclass it finds, so a mod can be several cooperating scripts;
-  don't cram unrelated behaviour into one giant tick loop. Each `Compile Include`
-  in the `.csproj` is one source file — add the entry when you add a file.
-- `*.csproj` — MSBuild project. `OutputType=Library` (the DLL *is* the mod),
-  `Platform=x64`, `TargetFrameworkVersion=v4.8`. Keep `Version`/`AssemblyVersion`/
-  `FileVersion` in sync with the version string shown in the menu title.
-- `packages.config` — NuGet deps. SHVDN, UI libs, and any other runtime libraries
-  are referenced from `..\packages\` via `<HintPath>`, not restored by NuGet —
-  they're game-runtime assemblies.
-- `bin/`, `obj/` — build output. Disposable; never committed (see `.gitignore`).
-- The deployable artifact is the built `*.dll` (+ its `.ini`), dropped into the
-  game's `scripts/` folder. If the mod depends on a library SHVDN does not ship
-  (e.g. a JSON library), that DLL ships alongside it too. Larger mods may ship
-  several files (data/asset folders, multiple DLLs) — keep the layout flat and
-  mirror it in your packaging.
+- **`*.cs`** — a `Script` subclass wires `Tick`/`KeyUp`/`KeyDown` and loads config in
+  its constructor. One file is fine for a small mod (organize by region); split by
+  concern as it grows — one `Script` per independent script, plain classes for menu,
+  config, logger, persistence, each feature group. SHVDN loads every `Script` it
+  finds, so a mod can be several cooperating scripts — don't cram unrelated behaviour
+  into one giant tick loop. Each `Compile Include` in the csproj is one file.
+- **`*.csproj`** — MSBuild, `OutputType=Library` (the DLL *is* the mod),
+  `Platform=x64`, `v4.8`. Legacy (non-SDK) projects ignore the csproj
+  `<AssemblyVersion>`/`<FileVersion>` — the DLL version comes from
+  `Properties/AssemblyInfo.cs`; keep it and the csproj `<Version>` in sync (the git
+  tag is the source of truth, stamped by `set-version.ps1`).
+- **Deps** — SHVDN, LemonUI, and other runtime libs are referenced from
+  `..\packages\` via `<HintPath>` with `SpecificVersion=False` (game-runtime
+  assemblies, not NuGet-restored). `bin/`/`obj/` are disposable, never committed.
+- **Artifact** — the built `*.dll` (+ its `.ini`), dropped into the game's
+  `scripts/`. Any non-SHVDN dependency DLL ships alongside; keep the layout flat and
+  mirror it in packaging.
 
 ## Paths & I/O
-- Resolve all file paths **next to the loaded DLL**, not against the process CWD —
-  the game's CWD is the root folder where GTA5.exe lives, so a relative path would
-  litter the game root. Use a small `ScriptPaths` helper built from
-  `Assembly.GetExecutingAssembly().Location` (falling back to
-  `AppDomain.CurrentDomain.BaseDirectory`); route the log, the `.ini`, and any data
-  directories through it.
-- Persistence must tolerate first run and corruption: a missing data file is the
-  valid initial (empty) state, not an error; a corrupt file should log and start
-  empty. Reads must never throw. Track an explicit "loaded" flag rather than
-  inferring load-state from an empty collection, so a genuinely-empty store doesn't
-  re-hit (and re-throw on) the disk every call.
+- **Never write to the game root or a relative path** (the game's CWD is where
+  GTA5.exe lives). Route the log, `.ini`, and data through a `ScriptPaths` helper. On
+  the **Enhanced** host, files under the game tree are LOCKED at launch — write
+  runtime data to `%APPDATA%\GTA V Mods\KernelPryanic\<ModName>\` instead.
+- **Persistence tolerates first run and corruption:** a missing file is the valid
+  empty state, a corrupt one logs and starts empty — reads never throw. Track an
+  explicit "loaded" flag so a genuinely-empty store doesn't re-hit disk every call.
 
 ## Style
-- Follow `.editorconfig` (Allman-off: braces on the same line, no newline before
-  `else`/`catch`/`finally`). 4-space indent.
-- `readonly` for anything set once in the constructor (config-derived flags, keys).
-  Mutable per-tick state stays plain fields.
-- `PascalCase` for methods, fields, and properties; `camelCase` for
-  locals/parameters; `UPPER` only where the game API already uses it. Match the
-  surrounding file's existing casing.
-- Each feature/action is a self-contained method (a `bool Is…()` predicate for a
-  detection, a `void …()` for an action). Keep predicates pure of side effects
-  where possible so the tick loop just composes them. When there are many, group
-  them into a class (or one class per feature) rather than letting the `Script`
-  subclass sprawl — keep the tick loop a thin dispatcher.
-- Keep types under a single mod namespace. One public `Script` subclass per
-  in-game script; helpers (menu, config, logger, persistence, feature classes) are
-  plain classes, `internal`/`static` unless another assembly needs them.
-- Keep conversions (speed/units/angles) in named helpers (`ToKPH`, `ToMPH`,
-  `DegreesToAngle`) rather than inlining magic factors.
+- Follow `.editorconfig`: braces on the same line, no newline before
+  `else`/`catch`/`finally`, 4-space indent.
+- `readonly` for anything set once in the constructor (config flags, keys); mutable
+  per-tick state stays plain fields.
+- `PascalCase` methods/fields/properties, `camelCase` locals/params, `UPPER` only
+  where the game API already uses it. Match the surrounding file.
+- **Each feature is a self-contained method** — a `bool Is…()` predicate (pure of
+  side effects where possible) or a `void …()` action, so the tick loop just
+  composes them. Group many into a feature class; keep the tick loop a thin
+  dispatcher and the `Script` subclass from sprawling.
+- One mod namespace; helpers are `internal`/`static` plain classes. Keep unit
+  conversions in named helpers (`ToKPH`, `DegreesToAngle`), never inline factors.
 
 ## The tick loop
-- `OnTick` runs every frame — it is the hot path. Process the menu, then
-  **throttle** expensive work (run checks/scans once every N ticks via a counter).
-  Don't do per-frame `World.GetNearby*` scans or heavy work without throttling.
-- Wrap the tick body in one broad `try/catch` that **logs** (`Logger.LogError`)
-  and returns — a held `Vehicle`/`Ped` may despawn between ticks and throw on
-  access. The catch must not swallow blind.
-- Bail out early and cheaply: not enabled, no player, already in the wrong state
-  (not driving, wrong vehicle class, etc.) → `return` before any scan.
-- Don't iterate a collection by index while a callee mutates it (e.g. a despawn
-  that removes from the list you're walking). Iterate a snapshot (`.ToList()`).
+- `OnTick` runs every frame. Process the menu, then **throttle** expensive work (a
+  counter, every N ticks) — no unthrottled `World.GetNearby*` scans or heavy work.
+- **Bail early and cheaply:** not enabled, no player, wrong state → `return` before
+  any scan.
+- Wrap the body in one broad `try/catch` that **logs and returns** (a held
+  `Vehicle`/`Ped` may despawn mid-tick and throw) — logs, never swallows blind.
+- Don't mutate a collection you're iterating by index (a despawn removing from your
+  list) — iterate a snapshot (`.ToList()`).
 
 ## Native calls & game API
-- Prefer the SHVDN wrapper types (`Vehicle`, `Ped`, `Game.Player`, `World`) over
-  raw natives. Drop to `Function.Call<T>(Hash.…, …)` only when there's no wrapper.
-- Comment WHY a magic hash/constant is what it is (a model hash, a timing window, a
-  cone angle) — the value alone tells the reader nothing.
-- Guard entity access: check `null` / `.Exists()` before dereferencing; a `Ped` or
-  `Vehicle` you held last tick may be gone this tick.
-- Capture/restore symmetry: if a mod reads game state into a snapshot and writes it
-  back later, every persisted property must be read in the capture half AND written
-  in the restore half — an asymmetry is the usual cause of "X doesn't save"
-  reports. Mind apply order and prerequisites: some properties only take effect
-  after a setup call (e.g. installing the mod kit) or in a specific sequence.
-- Dispose `IDisposable` resources (`using`) even for short-lived helpers.
+- Prefer SHVDN wrappers (`Vehicle`, `Ped`, `Game.Player`, `World`) over raw natives;
+  drop to `Function.Call<T>(Hash.…)` only when there's no wrapper.
+- **Guard entity access:** `null`/`.Exists()` before every dereference — an entity
+  held last tick may be gone this one.
+- **Capture/restore symmetry:** every property read in the capture half must be
+  written in the restore half — asymmetry is the usual "X doesn't save" bug. Mind
+  apply order (some props need a setup call first, e.g. the mod kit).
 
 ## Config (INI)
-- Settings load via `ScriptSettings.Load(...)` in the constructor (with a
-  DLL-relative path). Seed defaults idempotently (write only when the key is
-  absent) so a user's existing file is never clobbered, then read each value back
-  into a field.
-- Menu changes write straight back through `Config.SetValue` + `Config.Save()`, so
-  the `.ini` and the live UI stay in sync. Keep the seeding default and the
-  read-back fallback identical.
+- Load via `ScriptSettings.Load(...)` (DLL-relative) in the constructor. **Seed
+  defaults idempotently** (write only when the key is absent) so a user's file is
+  never clobbered, then read each value back into a field.
+- Menu changes write straight back via `Config.SetValue` + `Config.Save()` so INI and
+  UI stay in sync. Keep the seeding default and read-back fallback identical.
 
 ## UI / menu
-- The in-game menu uses **LemonUI** (`NativeMenu`, `NativeItem`,
-  `NativeCheckboxItem`, `NativeListItem<T>`). Build it once in an init method;
-  subscribe handlers there.
-- The menu title's version string is user-facing — bump it together with the
-  `csproj` versions on release.
-- List items map by value, not index (`Items.FindIndex(x => x == saved)`); keep the
-  option set and the persisted value in the same units so the lookup matches. If a
-  menu item's title is later used as a lookup key, keep title and key derivation in
-  sync or lookups silently miss.
+- **LemonUI** (`NativeMenu`, `NativeItem`, `NativeCheckboxItem`, `NativeListItem<T>`).
+  Build once in an init method; subscribe handlers there.
+- The menu title's version string is user-facing — derive it at runtime from the
+  assembly version so it always matches the release.
+- **List items map by value, not index** (`Items.FindIndex(x => x == saved)`); keep
+  the option set and the persisted value in the same units, and title/key derivation
+  in sync, or lookups silently miss.
 
 ## Errors & logging
-- Never silently swallow an error that the user or a future maintainer needs to
-  see. The tick loop's broad `catch` exists because a despawned-entity exception
-  must not crash the script mid-frame — but it **logs** and returns, it doesn't
-  swallow blind. A bare `catch { return false; }` is only acceptable for a
-  best-effort per-item operation where there is genuinely nothing to do with the
-  failure (and even then, prefer logging) — e.g. per-property capture/restore loops
-  that catch-and-log per item so one bad entry doesn't abort the whole operation.
-- Diagnostics go to the mod's own log file (in a writable data folder outside the
-  game tree — see below — cleared on startup) via a `Logger` helper, not anywhere
-  that depends on a console the player doesn't have. The logger itself must swallow
-  file-IO failures — a locked or unwritable log must never crash the mod.
-- On GTA V Enhanced the native ScriptHookV host opens every file already present
-  under the game folder at launch (root, `scripts\`, and subfolders) with a lock
-  held for the whole session, so those files can't be rewritten — the classic
-  "log won't update / settings don't persist" bug. Write runtime files (log, INI,
-  any persisted state) OUTSIDE the game tree, e.g. `%APPDATA%\<Game>\<Vendor>\<Mod>\`.
-- Fail fast on programmer errors; don't add defensive fallbacks that hide bugs.
+- **Never swallow blind.** The tick's broad `catch` exists only so a despawned-entity
+  exception can't crash mid-frame — it logs and returns. A bare `catch { return
+  false; }` is acceptable only for a best-effort per-item op (per-property
+  capture/restore, so one bad entry doesn't abort the whole) — and even then prefer
+  logging.
+- Diagnostics go to the mod's own log (next to the writable data, cleared on
+  startup) via a `Logger`, never a console the player lacks. The logger swallows its
+  own file-IO failures — a locked log must never crash the mod.
+- Fail fast on programmer errors; no defensive fallbacks that hide bugs.
 
 ## Build / lint / test
-- `make build` — compile the mod (Release x64, .NET 4.8) to `bin/`.
-- `make lint` — a clean rebuild; for C# the compile *is* the static check, so keep
-  it warning-free (don't let deprecation warnings accumulate). Green `make lint` is
-  the bar that matters.
-- `make test` — no automated runner; the game is the integration test. The target
-  just prints the manual-test steps.
-- `make package` — build, then zip an upload-ready archive (the `scripts/` layout
-  the site expects: the mod DLL plus any non-SHVDN dependency DLLs, never the
-  player-provided SHVDN/LemonUI assemblies). The zip name has no version suffix.
-- `make rebuild` / `make clean` — full rebuild / remove `bin/`+`obj/`(+`dist/`).
-- The Makefile discovers MSBuild via `vswhere`; override with
-  `make build MSBUILD=/path/to/MSBuild.exe` if your VS edition differs. VS Code's
-  `Ctrl+Shift+B` runs the same MSBuild via `.vscode/tasks.json`.
-- To test in-game: copy the built `*.dll` (+ its `.ini` and any non-SHVDN
-  dependency DLLs) into the game's `scripts/` folder and reload scripts in-game.
-- SHVDN / LemonUI assemblies are *not* shipped by the mod — they come from the
-  player's ScriptHookV .NET install. Reference them, don't bundle or commit them.
+- `make build` — Release x64 .NET 4.8 → `bin/`. `make lint` — a clean rebuild; the
+  compile *is* the static check, so keep it warning-free. `make rebuild`/`clean`.
+- `make test` — no runner; the game is the integration test, the target prints
+  manual steps.
+- `make package` — build + zip the upload-ready `scripts/` layout (mod DLL + non-SHVDN
+  deps, plus the Vortex `gta5mod.json`; never bundle the player's SHVDN/LemonUI). No
+  version suffix in the zip name.
+- Makefile finds MSBuild via `vswhere` (override `make build MSBUILD=…`); VS Code's
+  `Ctrl+Shift+B` runs the same. To test: copy the DLL (+`.ini`+deps) into `scripts/`
+  and reload in-game.
 
 ## Don't do
-- No comments that restate the code. Comment only WHY: a native-API quirk, a magic
-  hash/threshold, an entity-lifetime caveat, an apply-order requirement. If a
-  careful reader wouldn't miss it, delete it.
-- Don't do unthrottled heavy work in `OnTick` — it costs the player frames.
-- Don't write files to relative paths (the game root) — always resolve next to the
-  DLL.
-- Don't commit `bin/`, `obj/`, `.vs/`, log files, or stray `*.dll`.
-- Don't reference SHVDN/LemonUI/other libs by absolute machine path or a pinned
-  `SpecificVersion` — keep `SpecificVersion=False` so it binds against whatever the
-  player has installed.
-- Don't leave dead code in the shipped script (superseded paths, old experiments,
-  no-op constructions) — delete it rather than letting it rot.
+- No unthrottled heavy work in `OnTick`; no writing to the game root.
+- Don't commit `bin/`, `obj/`, `.vs/`, logs, or stray `*.dll`; don't bundle or pin
+  (`SpecificVersion`) SHVDN/LemonUI — bind against whatever the player has installed.
+- No dead code, no comments that restate code — comment only WHY, concise and natural.
