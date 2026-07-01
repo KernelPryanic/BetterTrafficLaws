@@ -97,9 +97,10 @@ namespace BetterTrafficLaws {
 		public static void Log(object message) => Write(LogLevel.Info, message);
 		public static void LogError(object message) => Write(LogLevel.Error, message);
 
-		// Always written, ignoring Threshold — for once-per-session triage lines (version,
-		// resolved config) that must appear even when the user runs at Error level.
-		public static void LogBanner(object message) => Write(LogLevel.Error, message, force: true);
+		// Info severity, but written even when the threshold is above it — for the
+		// once-per-session triage lines (version, resolved config) that must appear at
+		// any level. Error is reserved for actual failures, not "important" info.
+		public static void LogBanner(object message) => Write(LogLevel.Info, message, force: true);
 
 		static void Write(LogLevel level, object message, bool force = false) {
 			if (!force && level < Threshold) return;
@@ -295,7 +296,7 @@ namespace BetterTrafficLaws {
 			// Red light tickets on its own deferred schedule (see ResolveRedLightCrossing); the
 			// witness was already captured at the crossing, so apply straight away.
 			if (ResolveRedLightCrossing(currentVehicle)) {
-				ApplyWantedLevel();
+				ApplyWantedLevel("red light");
 				return;
 			}
 
@@ -311,8 +312,9 @@ namespace BetterTrafficLaws {
 			if (IsOverspeeding()) violations.Add("overspeed");
 			if (violations.Count == 0) return;
 
-			Logger.LogDebug($"Violation(s) detected: {string.Join(", ", violations)} at {ConvertedSpeed:F0} {SpeedUnits.SelectedItem}. Scanning for cops within {CopsDistance.SelectedItem}.");
-			if (WitnessingCop(currentVehicle) != null) ApplyWantedLevel();
+			string offense = string.Join(", ", violations);
+			Logger.LogDebug($"Violation(s) detected: {offense} at {ConvertedSpeed:F0} {SpeedUnits.SelectedItem}. Scanning for cops within {CopsDistance.SelectedItem}.");
+			if (WitnessingCop(currentVehicle) != null) ApplyWantedLevel(offense);
 		}
 
 		// The nearest allowed cop facing the player (60° cone) with line of sight, or null if none.
@@ -358,10 +360,10 @@ namespace BetterTrafficLaws {
 
 		// ApplyWantedLevelChangeNow makes the change take effect this frame, not after the game's
 		// internal delay. false = singleplayer.
-		void ApplyWantedLevel() {
+		void ApplyWantedLevel(string offense) {
 			Game.Player.Wanted.SetWantedLevel(StarsToAdd.SelectedItem, false);
 			Game.Player.Wanted.ApplyWantedLevelChangeNow(false);
-			Logger.LogDebug($"Ticketed -> wanted {StarsToAdd.SelectedItem}.");
+			Logger.Log($"Ticket: {offense} -> wanted {StarsToAdd.SelectedItem}.");
 		}
 
 		// Edge-triggered Debug trace of an early return: logs only when the reason
@@ -391,7 +393,7 @@ namespace BetterTrafficLaws {
 					// Right rotation reads negative; a real turn ends well past the threshold.
 					float turned = ((vehicle.Heading - PendingRedCrossHeading + 540f) % 360f) - 180f;
 					bool ticket = turned > -RightTurnHeadingDelta && PendingRedCrossWitnessed;
-					Logger.LogDebug($"Red-light verdict: turned={turned:F0} witnessed={PendingRedCrossWitnessed} -> {(ticket ? "TICKET" : (turned <= -RightTurnHeadingDelta ? "legal right turn" : "ran but unwitnessed"))}.");
+					Logger.Log($"Red-light verdict: turned={turned:F0} witnessed={PendingRedCrossWitnessed} -> {(ticket ? "ticket" : (turned <= -RightTurnHeadingDelta ? "legal right turn" : "ran but unwitnessed"))}.");
 					return ticket;
 				}
 
